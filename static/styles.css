@@ -1,6 +1,9 @@
 body { 
     margin: 0; 
     transition: background-color 0.3s;
+    touch-action: none; /* Prevent browser handling of touch events during drag */
+    -webkit-overflow-scrolling: touch; /* Improve scrolling on iOS */
+    overscroll-behavior: none; /* Prevent pull-to-refresh on modern browsers */
 }
 
 #whiteboard {
@@ -71,6 +74,7 @@ body {
     transition: opacity 0.2s;
     position: relative; /* Ensure it's in the stacking context */
     z-index: 5; /* Make sure it's above other content in the element */
+    touch-action: none; /* Disable browser handling of touches */
 }
 
 .magnet-header:hover, .note-header:hover {
@@ -81,6 +85,8 @@ body {
     cursor: move;
     color: #555;
     font-weight: bold;
+    -webkit-user-select: none; /* Prevent text selection during drag */
+    user-select: none;
 }
 
 .magnet img {
@@ -135,6 +141,7 @@ button:hover {
     width: 50px;
     height: 24px;
     margin-left: 5px;
+    margin-right: 10px;
 }
 
 .switch input {
@@ -173,6 +180,19 @@ input:checked + .slider {
 
 input:checked + .slider:before {
     transform: translateX(26px);
+}
+
+/* Magnetism toggle specific styles */
+#magnetismToggle + .slider {
+    background-color: #ff9800;
+}
+
+#magnetismToggle:checked + .slider {
+    background-color: #2196F3;
+}
+
+#magnetismToggle:focus + .slider {
+    box-shadow: 0 0 1px #2196F3;
 }
 
 /* Dark mode styles */
@@ -398,12 +418,13 @@ body.dark-mode .error {
 /* Resize handle */
 .resize-handle {
     position: absolute;
-    width: 15px;
-    height: 15px;
+    width: 25px; /* Increased touch target */
+    height: 25px; /* Increased touch target */
     bottom: 0;
     right: 0;
     cursor: nwse-resize;
     background: transparent;
+    touch-action: none; /* Disable browser handling of touches */
 }
 
 .resize-handle::before {
@@ -522,4 +543,98 @@ button[onclick="recoverElements()"] {
 
 button[onclick="recoverElements()"]hover {
     background-color: #0b7dda;
+}
+
+/* Additional mobile optimizations */
+@media (max-width: 768px) {
+    .controls {
+        flex-wrap: wrap;
+        justify-content: center;
+        width: calc(100% - 20px);
+        padding: 8px 5px;
+    }
+    
+    .controls span {
+        margin: 5px 3px;
+        font-size: 12px;
+    }
+    
+    .switch {
+        margin-right: 8px;
+    }
+    
+    button {
+        margin: 5px;
+        padding: 10px; /* Larger touch targets */
+    }
+    
+    .session-indicator {
+        margin: 5px 10px;
+    }
+    
+    .close-btn {
+        width: 25px; /* Larger touch target */
+        height: 25px; /* Larger touch target */
+    }
+}
+
+/* Style to show active touch feedback */
+.touch-active {
+    background-color: rgba(33, 150, 243, 0.2) !important;
+}
+
+/* Context menu styles */
+.context-menu {
+    display: none;
+    position: absolute;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    padding: 5px 0;
+    min-width: 150px;
+    z-index: 1100;
+}
+
+.menu-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.menu-item:hover {
+    background-color: #f5f5f5;
+}
+
+/* Dark mode styling for context menu */
+body.dark-mode .context-menu {
+    background: #333;
+    border-color: #555;
+}
+
+body.dark-mode .menu-item:hover {
+    background-color: #444;
+}
+
+/* Paste button styling */
+.paste-btn {
+    background-color: #ff9800;
+}
+
+.paste-btn:hover {
+    background-color: #f57c00;
+}
+
+/* Styling for paste prompt */
+.prompt {
+    padding: 10px;
+    text-align: center;
+    background-color: #e3f2fd;
+    border-radius: 4px;
+    color: #0d47a1;
+}
+
+body.dark-mode .prompt {
+    background-color: #1a237e;
+    color: #e3f2fd;
 }
