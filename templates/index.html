@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Whiteboard Web App</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <!-- Session Modal -->
+    <div id="sessionModal" class="modal">
+        <div class="modal-content">
+            <h2>Whiteboard Web App</h2>
+            <p>Enter a session name to start or join a already established whiteboard:</p>
+            <div class="search-container">
+                <input type="text" id="sessionInput" placeholder="Session name (e.g. myproject123)" required>
+                <button onclick="joinSession()">Join / Create</button>
+            </div>
+            <p class="session-info">Session names are private and case-sensitive.</p>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button id="addMagnetBtn" onclick="addMagnet()">Add Magnet</button>
+        <button onclick="addNote()">Add Note</button>
+        <button onclick="recoverElements()" title="Recover elements that have moved offscreen">Recover</button>
+        <span>Dark Mode:</span>
+        <label class="switch">
+            <input type="checkbox" id="darkModeToggle" onchange="toggleDarkMode()">
+            <span class="slider"></span>
+        </label>
+        <span class="session-indicator" id="sessionBadge"></span>
+        <button class="exit-session-btn" onclick="exitSession()">Exit</button>
+        <button class="reset-btn" onclick="resetWhiteboard()">Reset</button>
+    </div>
+
+    <div id="whiteboard"></div>
+    
+    <!-- Tenor GIF Search Modal -->
+    <div id="gifModal" class="modal">
+        <div class="modal-content">
+            <span class="modal-close" onclick="closeGifModal()">&times;</span>
+            <h2>Search Tenor GIFs</h2>
+            <div class="search-container">
+                <input type="text" id="gifSearchInput" placeholder="Search for GIFs..." oninput="debouncedSearch()">
+                <button onclick="searchGifs()">Search</button>
+            </div>
+            <div id="gifResults" class="gif-results"></div>
+        </div>
+    </div>
+
+    <script>
+    let selectedElement = null;
+    let isDragging = false;
+    let isResizing = false;
+    let resizeHandle = null;
+    const TENOR_API_KEY = "LIVDSRZULELA"; // Demo API key, replace with your own
+    let currentGifTarget = null;
+    let debounceTimer;
+    let currentSession = null;
+    
+    // Check if user is in a session on page load
+    window.onload = function() {
+        // Load dark mode preference
+        if (localStorage.getItem('darkMode') === 'true') {
+            document.body.classList.add('dark-mode');
+            document.getElementById('darkModeToggle').checked = true;
+        }
+        
+        // Check for existing session
+        currentSession = localStorage.getItem('currentSession');
+        if (currentSession) {
+            loadSession(currentSession);
+        } else {
+            showSessionModal();
+        }
+    };
+    
+    function showSessionModal() {
+        document.getElementById('sessionModal').style.display = 'block';
+        document.getElementById('sessionInput').focus();
+    }
+    
+    function joinSession() {
+        const sessionName = document.getElementById('sessionInput').value.trim();
+        if (!sessionName) return;
+        
+        currentSession = `whiteboard_${sessionName}`;
+        localStorage.setItem('currentSession', currentSession);
+        document.getElementById('sessionBadge').textContent = sessionName;
+        document.getElementById('sessionModal').style.display = 'none';
+        
+        // Load existing data or initialize empty session
+        loadSession(currentSession);
+    }
+    
+    function exitSession() {
+        if (confirm('Exit this session? You can rejoin later with the same session name.')) {
+            localStorage.removeItem('currentSession');
+            document.getElementById('whiteboard').innerHTML = '';
+            showSessionModal();
+        }
+    }
+    
+    function loadSession(sessionKey) {
+        // Display the session name
+        const displayName = sessionKey.replace('whiteboard_', '');
+        document.getElementById('sessionBadge').textContent = displayName;
+        
+        // Clear current whiteboard
+        document.getElementById('whiteboard').innerHTML = '';
+        
+        // Load saved elements
+        const savedData = localStorage.getItem(sessionKey);
+        if (savedData) {
+            try {
+                const elements = JSON.parse(savedData);
+                elements.forEach(elem => {
+                    if (elem.type === 'magnet') {
+                        createMagnetFromData(elem);
+                    } else if (elem.type === 'note') {
+                        createNoteFromData(elem);
+                    }
+                });
+            } catch (e) {
+                console.error('Error loading saved data:', e);
+            }
+        }
+    }
+    
+    function saveCurrentSession() {
+        if (!currentSession) return;
+        
+        const elements = [];
+        // Save magnets
+        document.querySelectorAll('.magnet').forEach(magnet => {
+            const rect = magnet.getBoundingClientRect();
+            const contentContainer = magnet.querySelector('.content-container');
+            const hasContent = contentContainer && contentContainer.innerHTML.trim() !== '';
+            
+            const data = {
+                type: 'magnet',
+                left: magnet.style.left,
+                top: magnet.style.top,
+                width: magnet.style.width || rect.width + 'px',
+                height: magnet.style.height || rect.height + 'px',
+                content: contentContainer ? contentContainer.innerHTML : '',
+                hasContent: hasContent // Track whether the magnet has content
+            };
+            elements.push(data);
+        });
+        
+        // Save notes
+        document.querySelectorAll('.note').forEach(note => {
+            const rect = note.getBoundingClientRect();
+            const data = {
+                type: 'note',
+                left: note.style.left,
+                top: note.style.top,
+                width: note.style.width || rect.width + 'px',
+                height: note.style.height || rect.height + 'px',
+                content: note.querySelector('div[contenteditable="true"]').innerHTML
+            };
+            elements.push(data);
+        });
+        
+        // Save to localStorage
+        localStorage.setItem(currentSession, JSON.stringify(elements));
+    }
+    
+    function createMagnetFromData(data) {
+        const magnet = document.createElement('div');
+        magnet.className = 'magnet';
+        magnet.style.left = data.left;
+        magnet.style.top = data.top;
+        magnet.style.width = data.width;
+        magnet.style.height = data.height;
+        magnet.style.zIndex = 1000; // Ensure magnets are on top
+        
+        // Check if the magnet already has content
+        if (data.hasContent) {
+            magnet.innerHTML = `
+                <button class="close-btn" onclick="removeElement(this)">X</button>
+                <div class="magnet-header"><span class="drag-icon">≡</span></div>
+                <div class="content-container">${data.content}</div>
+                <div class="resize-handle"></div>
+            `;
+        } else {
+            magnet.innerHTML = `
+                <button class="close-btn" onclick="removeElement(this)">X</button>
+                <div class="magnet-header"><span class="drag-icon">≡</span></div>
+                <input type="file" accept="image/*" onchange="updateImage(this)" style="display:none">
+                <div class="button-container">
+                    <button class="small-btn upload-btn" onclick="this.parentElement.querySelector('input[type=file]').click()">Upload Image</button>
+                    <button class="small-btn gif-btn" onclick="openGifModal(this)">Search GIFs</button>
+                </div>
+                <div class="content-container">${data.content}</div>
+                <div class="resize-handle"></div>
+            `;
+        }
+        
+        setupElementEvents(magnet);
+        document.getElementById('whiteboard').appendChild(magnet);
+    }
+    
+    function createNoteFromData(data) {
+        const note = document.createElement('div');
+        note.className = 'note';
+        note.style.left = data.left;
+        note.style.top = data.top;
+        note.style.width = data.width;
+        note.style.height = data.height;
+        note.style.zIndex = 100; // Lower z-index than magnets
+        
+        note.innerHTML = `
+            <button class="close-btn" onclick="removeElement(this)">X</button>
+            <div class="note-header"><span class="drag-icon">≡</span></div>
+            <div contenteditable="true" style="padding:10px; min-height:50px; height:calc(100% - 50px); overflow-y:auto">${data.content}</div>
+            <div class="resize-handle"></div>
+        `;
+        
+        setupElementEvents(note);
+        document.getElementById('whiteboard').appendChild(note);
+        
+        // Setup autosave for note edits
+        note.querySelector('[contenteditable="true"]').addEventListener('input', function() {
+            saveCurrentSession();
+        });
+    }
+
+    function addMagnet() {
+        const magnet = document.createElement('div');
+        magnet.className = 'magnet';
+        magnet.style.zIndex = 1000; // Ensure magnets are on top
+        
+        magnet.innerHTML = `
+            <button class="close-btn" onclick="removeElement(this)">X</button>
+            <div class="magnet-header"><span class="drag-icon">≡</span></div>
+            <input type="file" accept="image/*" onchange="updateImage(this)" style="display:none">
+            <div class="button-container">
+                <button class="small-btn upload-btn" onclick="this.parentElement.querySelector('input[type=file]').click()">Upload Image</button>
+                <button class="small-btn gif-btn" onclick="openGifModal(this)">Search GIFs</button>
+            </div>
+            <div class="content-container"></div>
+            <div class="resize-handle"></div>
+        `;
+        
+        magnet.style.left = (Math.random() * (window.innerWidth - 200)) + 'px';
+        magnet.style.top = (Math.random() * (window.innerHeight - 200)) + 'px';
+        
+        setupElementEvents(magnet);
+        document.getElementById('whiteboard').appendChild(magnet);
+        saveCurrentSession();
+    }
+
+    function addNote() {
+        const note = document.createElement('div');
+        note.className = 'note';
+        note.style.zIndex = 100; // Lower z-index than magnets
+        
+        note.innerHTML = `
+            <button class="close-btn" onclick="removeElement(this)">X</button>
+            <div class="note-header"><span class="drag-icon">≡</span></div>
+            <div contenteditable="true" style="padding:10px; min-height:50px; height:calc(100% - 50px); overflow-y:auto"></div>
+            <div class="resize-handle"></div>
+        `;
+        
+        note.style.left = (Math.random() * (window.innerWidth - 200)) + 'px';
+        note.style.top = (Math.random() * (window.innerHeight - 200)) + 'px';
+        
+        setupElementEvents(note);
+        document.getElementById('whiteboard').appendChild(note);
+        
+        // Setup autosave for note edits
+        note.querySelector('[contenteditable="true"]').addEventListener('input', function() {
+            saveCurrentSession();
+        });
+        
+        saveCurrentSession();
+    }
+    
+    function setupElementEvents(element) {
+        // Setup drag events
+        const header = element.querySelector('.magnet-header, .note-header');
+        header.addEventListener('mousedown', function(e) {
+            startDrag(e, element);
+        });
+        
+        // Setup resize events
+        const resizer = element.querySelector('.resize-handle');
+        resizer.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            isResizing = true;
+            resizeHandle = {
+                element: element,
+                startX: e.clientX,
+                startY: e.clientY,
+                startWidth: parseInt(document.defaultView.getComputedStyle(element).width, 10),
+                startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10)
+            };
+        });
+    }
+
+    function startDrag(e, element) {
+        e.preventDefault();
+        selectedElement = element;
+        isDragging = true;
+        const rect = element.getBoundingClientRect();
+        selectedElement.offsetX = e.clientX - rect.left;
+        selectedElement.offsetY = e.clientY - rect.top;
+    }
+
+    const SNAP_DISTANCE = 20; // Reduced for more precise snapping
+
+    document.onmousemove = (e) => {
+        if (isDragging && selectedElement) {
+            // Store original position to calculate movement delta
+            const originalLeft = parseInt(selectedElement.style.left) || 0;
+            const originalTop = parseInt(selectedElement.style.top) || 0;
+            
+            // Calculate new position
+            const newLeft = e.clientX - selectedElement.offsetX;
+            const newTop = e.clientY - selectedElement.offsetY;
+            
+            // Keep elements within viewport boundaries
+            const maxLeft = window.innerWidth - 50; // At least 50px of element remains visible
+            const maxTop = window.innerHeight - 50;
+            
+            const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
+            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
+            
+            // Apply new position
+            selectedElement.style.left = boundedLeft + 'px';
+            selectedElement.style.top = boundedTop + 'px';
+
+            // Calculate the movement delta
+            const deltaLeft = boundedLeft - originalLeft;
+            const deltaTop = boundedTop - originalTop;
+            
+            // Find and move attached magnets if this is a note
+            if (selectedElement.classList.contains('note')) {
+                moveAttachedMagnets(selectedElement, deltaLeft, deltaTop);
+            }
+            
+            // Get current dimensions for snapping calculations
+            const selectedRect = selectedElement.getBoundingClientRect();
+            
+            // Check for snapping to other elements
+            const allElements = document.querySelectorAll('.magnet, .note');
+            allElements.forEach(otherElement => {
+                if (otherElement !== selectedElement) {
+                    // Snap logic and attachment detection
+                    snapElements(selectedElement, otherElement);
+                }
+            });
+            
+        } else if (isResizing && resizeHandle) {
+            const element = resizeHandle.element;
+            const width = resizeHandle.startWidth + (e.clientX - resizeHandle.startX);
+            const height = resizeHandle.startHeight + (e.clientY - resizeHandle.startY);
+            
+            if (width > 100) element.style.width = width + 'px';
+            if (height > 100) element.style.height = height + 'px';
+        }
+    };
+
+    // Function to find and move magnets that are attached to the given note
+    function moveAttachedMagnets(note, deltaLeft, deltaTop) {
+        const noteRect = note.getBoundingClientRect();
+        
+        document.querySelectorAll('.magnet').forEach(magnet => {
+            const magnetRect = magnet.getBoundingClientRect();
+            
+            // Check all four edge attachments with some tolerance
+            if (isAttached(noteRect, magnetRect)) {
+                // Move the magnet by the same delta
+                const currentLeft = parseInt(magnet.style.left) || 0;
+                const currentTop = parseInt(magnet.style.top) || 0;
+                
+                magnet.style.left = (currentLeft + deltaLeft) + 'px';
+                magnet.style.top = (currentTop + deltaTop) + 'px';
+            }
+        });
+    }
+
+    // Helper function to check if two elements are attached
+    function isAttached(rect1, rect2) {
+        // Edge proximity detection with tolerance
+        const ATTACH_TOLERANCE = SNAP_DISTANCE;
+        
+        // Check if rect2 is attached to any edge of rect1
+        const isLeftAttached = Math.abs(rect2.right - rect1.left) < ATTACH_TOLERANCE;
+        const isRightAttached = Math.abs(rect2.left - rect1.right) < ATTACH_TOLERANCE;
+        const isTopAttached = Math.abs(rect2.bottom - rect1.top) < ATTACH_TOLERANCE;
+        const isBottomAttached = Math.abs(rect2.top - rect1.bottom) < ATTACH_TOLERANCE;
+        
+        // Also check for partial overlap along edges
+        const isVerticalOverlap = (rect2.top < rect1.bottom && rect2.bottom > rect1.top);
+        const isHorizontalOverlap = (rect2.left < rect1.right && rect2.right > rect1.left);
+        
+        // For left/right attachment, must have some vertical overlap
+        const isValidLeftRightAttachment = (isLeftAttached || isRightAttached) && isVerticalOverlap;
+        // For top/bottom attachment, must have some horizontal overlap
+        const isValidTopBottomAttachment = (isTopAttached || isBottomAttached) && isHorizontalOverlap;
+        
+        return isValidLeftRightAttachment || isValidTopBottomAttachment;
+    }
+
+    // Function to snap elements together
+    function snapElements(element1, element2) {
+        const rect1 = element1.getBoundingClientRect();
+        const rect2 = element2.getBoundingClientRect();
+        
+        // Check left-right snapping
+        if (Math.abs(rect1.left - rect2.right) < SNAP_DISTANCE &&
+            (rect1.top < rect2.bottom && rect1.bottom > rect2.top)) {
+            element1.style.left = rect2.right + 'px';
+        }
+        
+        // Check right-left snapping
+        if (Math.abs(rect1.right - rect2.left) < SNAP_DISTANCE &&
+            (rect1.top < rect2.bottom && rect1.bottom > rect2.top)) {
+            element1.style.left = (rect2.left - rect1.width) + 'px';
+        }
+        
+        // Check top-bottom snapping
+        if (Math.abs(rect1.top - rect2.bottom) < SNAP_DISTANCE &&
+            (rect1.left < rect2.right && rect1.right > rect2.left)) {
+            element1.style.top = rect2.bottom + 'px';
+        }
+        
+        // Check bottom-top snapping
+        if (Math.abs(rect1.bottom - rect2.top) < SNAP_DISTANCE &&
+            (rect1.left < rect2.right && rect1.right > rect2.left)) {
+            element1.style.top = (rect2.top - rect1.height) + 'px';
+        }
+    }
+
+    // Function to recover elements that have moved outside the visible area
+    function recoverElements() {
+        let recoveredElements = 0;
+        const whiteboard = document.getElementById('whiteboard');
+        const maxRight = window.innerWidth - 200; // Keep elements within view
+        const maxBottom = window.innerHeight - 200;
+        
+        document.querySelectorAll('.magnet, .note').forEach(element => {
+            const rect = element.getBoundingClientRect();
+            let needsRepositioning = false;
+            
+            // Check if element is mostly offscreen or drag handle is inaccessible
+            if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight) {
+                needsRepositioning = true;
+            }
+            
+            // Specifically check if header is offscreen
+            const header = element.querySelector('.magnet-header, .note-header');
+            if (header) {
+                const headerRect = header.getBoundingClientRect();
+                if (headerRect.top < 0 || headerRect.left < 0 || headerRect.right > window.innerWidth) {
+                    needsRepositioning = true;
+                }
+            }
+            
+            if (needsRepositioning) {
+                // Reposition to a visible area
+                element.style.left = Math.min(Math.max(50, rect.left), maxRight) + 'px';
+                element.style.top = Math.min(Math.max(50, rect.top), maxBottom) + 'px';
+                recoveredElements++;
+            }
+        });
+        
+        if (recoveredElements > 0) {
+            alert(`Recovered ${recoveredElements} element(s) that were difficult to access.`);
+            saveCurrentSession();
+        } else {
+            alert('No elements needed recovery.');
+        }
+    }
+
+    document.onmouseup = () => {
+        if (isDragging || isResizing) {
+            saveCurrentSession();
+        }
+        isDragging = false;
+        isResizing = false;
+        selectedElement = null;
+        resizeHandle = null;
+    };
+
+    function removeElement(element) {
+        const parent = element.parentElement;
+        parent.remove();
+        saveCurrentSession();
+    }
+
+    function updateImage(input) {
+        if (input.files && input.files[0]) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                // Clear previous content and add new image
+                const magnet = input.closest('.magnet');
+                const container = magnet.querySelector('.content-container');
+                container.innerHTML = ''; 
+                const img = document.createElement('img');
+                img.src = e.target.result;
+                img.alt = "Magnet Image";
+                img.style.maxWidth = "100%";  // Ensure image fits container width
+                img.style.maxHeight = "100%"; // Ensure image fits container height
+                container.appendChild(img);
+                
+                saveCurrentSession();
+                
+                // Remove the buttons
+                const buttonContainer = magnet.querySelector('.button-container');
+                if (buttonContainer) {
+                    buttonContainer.remove();
+                }
+            };
+            reader.readAsDataURL(input.files[0]);
+        }
+    }
+    
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        // Save preference to localStorage
+        localStorage.setItem('darkMode', document.body.classList.contains('dark-mode'));
+    }
+    
+    // Tenor GIF functionality
+    function openGifModal(buttonElement) {
+        // Store the entire magnet element for better access
+        currentGifTarget = buttonElement.closest('.magnet');
+        document.getElementById('gifModal').style.display = 'block';
+        const searchInput = document.getElementById('gifSearchInput');
+        searchInput.value = '';
+        document.getElementById('gifResults').innerHTML = '';
+        
+        // Focus the input field for immediate typing
+        setTimeout(() => searchInput.focus(), 100);
+    }
+
+    function closeGifModal() {
+        document.getElementById('gifModal').style.display = 'none';
+    }
+
+    // Debounce function to limit API calls while typing
+    function debouncedSearch() {
+        clearTimeout(debounceTimer);
+        const searchTerm = document.getElementById('gifSearchInput').value.trim();
+        
+        // Clear results if search is empty
+        if (!searchTerm) {
+            document.getElementById('gifResults').innerHTML = '';
+            return;
+        }
+        
+        // Show "Searching..." indicator immediately
+        if (searchTerm.length > 1) {
+            document.getElementById('gifResults').innerHTML = '<div class="loading">Searching...</div>';
+        }
+        
+        // Wait for 500ms of no typing before searching
+        debounceTimer = setTimeout(() => {
+            if (searchTerm.length > 1) {
+                searchGifs();
+            }
+        }, 500);
+    }
+
+    function searchGifs() {
+        const searchTerm = document.getElementById('gifSearchInput').value.trim();
+        if (!searchTerm) return;
+
+        const resultsContainer = document.getElementById('gifResults');
+        resultsContainer.innerHTML = '<div class="loading">Loading...</div>';
+        
+        // First try using the proxy endpoint
+        fetch(`/tenor-proxy?q=${encodeURIComponent(searchTerm)}&key=${TENOR_API_KEY}&limit=16`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(handleGifResults)
+            .catch(error => {
+                console.log("Proxy failed, falling back to direct API:", error);
+                
+                // Fallback to direct API call
+                fetch(`https://api.tenor.com/v1/search?q=${encodeURIComponent(searchTerm)}&key=${TENOR_API_KEY}&limit=16`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`API error: ${response.status}`);
+                        }
+                        return response.json();
+                    })
+                    .then(handleGifResults)
+                    .catch(error => {
+                        console.error('Error fetching GIFs:', error);
+                        resultsContainer.innerHTML = `<div class="error">Error loading GIFs: ${error.message}</div>`;
+                    });
+            });
+    }
+
+    function handleGifResults(data) {
+        const resultsContainer = document.getElementById('gifResults');
+        resultsContainer.innerHTML = '';
+        
+        if (!data.results || data.results.length === 0) {
+            resultsContainer.innerHTML = '<div class="no-results">No GIFs found</div>';
+            return;
+        }
+        
+        data.results.forEach(result => {
+            const gifItem = document.createElement('div');
+            gifItem.className = 'gif-item';
+            
+            // Make sure we can access the media objects correctly
+            let gifUrl = '';
+            let previewUrl = '';
+            
+            if (result.media && result.media.length > 0 && result.media[0].gif) {
+                gifUrl = result.media[0].gif.url;
+                // Try to get smaller preview if available
+                previewUrl = result.media[0].tinygif ? result.media[0].tinygif.url : gifUrl;
+            } else if (result.url) {
+                // Fallback to a URL directly on the result if available
+                gifUrl = result.url;
+                previewUrl = result.url;
+            } else {
+                console.warn("Could not find GIF URL in result", result);
+                return; // Skip this result
+            }
+            
+            const gifImg = document.createElement('img');
+            gifImg.src = previewUrl;
+            gifImg.dataset.fullGif = gifUrl;
+            gifImg.alt = result.title || "GIF";
+            
+            // Add click event directly to the container for better touch support
+            gifItem.onclick = function() {
+                selectGif(gifUrl);
+            };
+            
+            gifItem.appendChild(gifImg);
+            resultsContainer.appendChild(gifItem);
+        });
+    }
+
+    function selectGif(gifUrl) {
+        if (!currentGifTarget) {
+            console.error("No target element for GIF");
+            alert("Error: Couldn't add GIF. Please try again.");
+            return;
+        }
+        
+        try {
+            // Get the content container
+            const container = currentGifTarget.querySelector('.content-container');
+            if (!container) {
+                throw new Error("Could not find content container");
+            }
+            
+            // Clear the container and add the new GIF
+            container.innerHTML = '';
+            
+            const img = new Image();
+            img.onload = function() {
+                console.log("GIF loaded successfully");
+                saveCurrentSession();
+            };
+            img.onerror = function() {
+                console.error("Failed to load GIF image:", gifUrl);
+                container.innerHTML = '<p>Failed to load GIF</p>';
+            };
+            img.src = gifUrl;
+            img.alt = "Tenor GIF";
+            img.style.maxWidth = "100%";  // Ensure image fits container width
+            img.style.maxHeight = "100%"; // Ensure image fits container height
+            container.appendChild(img);
+            
+            // Remove the buttons
+            const buttonContainer = currentGifTarget.querySelector('.button-container');
+            if (buttonContainer) {
+                buttonContainer.remove();
+            }
+            
+            // Close the modal and reset target
+            document.getElementById('gifModal').style.display = 'none';
+        } catch (error) {
+            console.error("Error adding GIF:", error);
+            alert("Failed to add GIF. Please try again.");
+        }
+    }
+
+    // Remove the keypress event and let the oninput handle it
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize any additional event listeners after DOM is loaded
+        const searchInput = document.getElementById('gifSearchInput');
+        
+        // Fallback for older browsers that might not fully support oninput
+        searchInput.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') {
+                searchGifs();
+            }
+        });
+    });
+
+    // Session input key handler
+    document.getElementById('sessionInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            joinSession();
+        }
+    });
+
+    // Add this new function for the reset button
+    function resetWhiteboard() {
+        if (confirm('Are you sure you want to reset the whiteboard? This will remove all items.')) {
+            // Clear the whiteboard
+            document.getElementById('whiteboard').innerHTML = '';
+            
+            // Save the empty state to localStorage
+            saveCurrentSession();
+            
+            console.log('Whiteboard has been reset');
+        }
+    }
+
+    function createFoodMagnet(imageUrl) {
+        // Creates a magnet with a pre-chosen image
+        const magnet = document.createElement('div');
+        magnet.className = 'magnet';
+        magnet.style.zIndex = 1000; // Ensure magnets are on top
+        
+        magnet.innerHTML = `
+            <button class="close-btn" onclick="removeElement(this)">X</button>
+            <div class="magnet-header"><span class="drag-icon">≡</span></div>
+            <input type="file" accept="image/*" onchange="updateImage(this)" style="display:none">
+            <div class="button-container">
+                <button class="small-btn upload-btn" onclick="this.parentElement.querySelector('input[type=file]').click()">Upload Image</button>
+                <button class="small-btn gif-btn" onclick="openGifModal(this)">Search GIFs</button>
+            </div>
+            <div class="content-container">
+                <img src="${imageUrl}" alt="Food Magnet" style="max-width:100%; max-height:100%;">
+            </div>
+            <div class="resize-handle"></div>
+        `;
+        setupElementEvents(magnet);
+        document.getElementById('whiteboard').appendChild(magnet);
+        saveCurrentSession();
+    }
+    </script>
+</body>
+</html>
