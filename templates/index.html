@@ -101,10 +101,10 @@
             const rect = el.getBoundingClientRect();
             elements.push({
                 type: el.classList.contains('magnet') ? 'magnet' : 'note',
-                left: el.style.left,
-                top: el.style.top,
-                width: rect.width + 'px', // Use actual width
-                height: rect.height + 'px', // Use actual height
+                left: el.style.left || rect.left + 'px',
+                top: el.style.top || rect.top + 'px',
+                width: rect.width + 'px',
+                height: rect.height + 'px',
                 content: el.innerHTML
             });
         });
@@ -138,25 +138,24 @@
         selectedElement = element;
         isDragging = true;
         const rect = element.getBoundingClientRect();
-        selectedElement.offsetX = e.clientX - rect.left;
-        selectedElement.offsetY = e.clientY - rect.top;
+        selectedElement.offsetX = (e.clientX || e.touches[0].clientX) - rect.left;
+        selectedElement.offsetY = (e.clientY || e.touches[0].clientY) - rect.top;
         
-        // If dragging a note, find attached magnets
+        element.classList.add('being-dragged');
+        
         if (element.classList.contains('note')) {
             attachedElements = findAttachedElements(element);
         }
     }
     
-    // Find magnets that are attached to this element
     function findAttachedElements(element) {
         const attached = {};
         const elementRect = element.getBoundingClientRect();
-        const snapDistance = 15; // Same as snap distance
+        const snapDistance = 15;
         
         document.querySelectorAll('.magnet').forEach(magnet => {
             const magnetRect = magnet.getBoundingClientRect();
             
-            // Check if this magnet is attached to the element (close enough to be considered attached)
             const isAttachedHorizontally = 
                 Math.abs(magnetRect.left - elementRect.right) < snapDistance || 
                 Math.abs(magnetRect.right - elementRect.left) < snapDistance ||
@@ -170,14 +169,12 @@
                 Math.abs(magnetRect.bottom - elementRect.bottom) < snapDistance;
                 
             if (isAttachedHorizontally || isAttachedVertically) {
-                // Store the relative position of the magnet to the note
                 attached[magnet.id || Date.now() + Math.random()] = {
                     element: magnet,
                     offsetX: elementRect.left - magnetRect.left,
                     offsetY: elementRect.top - magnetRect.top
                 };
                 
-                // Ensure magnet has an ID for tracking
                 if (!magnet.id) {
                     magnet.id = 'magnet-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
                 }
@@ -189,9 +186,6 @@
 
     document.onmousemove = (e) => {
         if (isDragging && selectedElement) {
-            const originalLeft = parseInt(selectedElement.style.left) || 0;
-            const originalTop = parseInt(selectedElement.style.top) || 0;
-
             const newLeft = e.clientX - selectedElement.offsetX;
             const newTop = e.clientY - selectedElement.offsetY;
 
@@ -201,19 +195,15 @@
             const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
             const boundedTop = Math.max(0, Math.min(newTop, maxTop));
 
-            // Move the selected element
             selectedElement.style.left = boundedLeft + 'px';
             selectedElement.style.top = boundedTop + 'px';
             
-            // Also move any attached elements
             if (selectedElement.classList.contains('note')) {
                 Object.values(attachedElements).forEach(info => {
                     const magnet = info.element;
-                    // Move the magnet maintaining the same relative position
                     const magnetLeft = boundedLeft - info.offsetX;
                     const magnetTop = boundedTop - info.offsetY;
                     
-                    // Ensure the magnet stays within bounds
                     const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
                     const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
                     
@@ -222,7 +212,7 @@
                 });
             }
             
-            snapToNearbyElements(selectedElement, 15); // Reduced snap range for more precision
+            snapToNearbyElements(selectedElement, 15);
             scheduleSave();
         } else if (isResizing && resizeHandle) {
             const element = resizeHandle.element;
@@ -238,12 +228,8 @@
     document.addEventListener('touchmove', function(e) {
         if (isDragging && selectedElement) {
             e.preventDefault();
-
             const touch = e.touches[0];
-
-            const originalLeft = parseInt(selectedElement.style.left) || 0;
-            const originalTop = parseInt(selectedElement.style.top) || 0;
-
+            
             const newLeft = touch.clientX - selectedElement.offsetX;
             const newTop = touch.clientY - selectedElement.offsetY;
 
@@ -253,19 +239,15 @@
             const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
             const boundedTop = Math.max(0, Math.min(newTop, maxTop));
 
-            // Move the selected element
             selectedElement.style.left = boundedLeft + 'px';
             selectedElement.style.top = boundedTop + 'px';
             
-            // Also move any attached elements
             if (selectedElement.classList.contains('note')) {
                 Object.values(attachedElements).forEach(info => {
                     const magnet = info.element;
-                    // Move the magnet maintaining the same relative position
                     const magnetLeft = boundedLeft - info.offsetX;
                     const magnetTop = boundedTop - info.offsetY;
                     
-                    // Ensure the magnet stays within bounds
                     const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
                     const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
                     
@@ -288,20 +270,33 @@
         }
     }, { passive: false });
 
-    document.addEventListener('touchend', function(e) {
+    function endDrag() {
+        if (selectedElement) {
+            selectedElement.classList.remove('being-dragged');
+            
+            if (!selectedElement.style.left.includes('px')) {
+                selectedElement.style.left = selectedElement.style.left + 'px';
+            }
+            if (!selectedElement.style.top.includes('px')) {
+                selectedElement.style.top = selectedElement.style.top + 'px';
+            }
+            
+            scheduleSave();
+        }
+        
         isDragging = false;
         isResizing = false;
         selectedElement = null;
         resizeHandle = null;
-        attachedElements = {}; // Clear the attached elements
+        attachedElements = {};
+    }
+
+    document.addEventListener('touchend', function(e) {
+        endDrag();
     });
 
     document.onmouseup = () => {
-        isDragging = false;
-        isResizing = false;
-        selectedElement = null;
-        resizeHandle = null;
-        attachedElements = {}; // Clear the attached elements
+        endDrag();
     };
 
     function addMagnet() {
@@ -359,23 +354,31 @@
 
     function setupElementEvents(element) {
         const header = element.querySelector('.magnet-header, .note-header');
-        header.addEventListener('mousedown', function(e) {
+        
+        const newHeader = header.cloneNode(true);
+        header.parentNode.replaceChild(newHeader, header);
+        
+        newHeader.addEventListener('mousedown', function(e) {
             startDrag(e, element);
         });
 
-        header.addEventListener('touchstart', function(e) {
+        newHeader.addEventListener('touchstart', function(e) {
             e.preventDefault();
             const touch = e.touches[0];
-            const touchEvent = {
+            startDrag({
                 clientX: touch.clientX,
                 clientY: touch.clientY,
-                preventDefault: function() {}
-            };
-            startDrag(touchEvent, element);
+                preventDefault: function() {},
+                touches: e.touches
+            }, element);
         }, { passive: false });
 
         const resizer = element.querySelector('.resize-handle');
-        resizer.addEventListener('mousedown', function(e) {
+        
+        const newResizer = resizer.cloneNode();
+        resizer.parentNode.replaceChild(newResizer, resizer);
+        
+        newResizer.addEventListener('mousedown', function(e) {
             e.preventDefault();
             e.stopPropagation();
             isResizing = true;
@@ -388,7 +391,7 @@
             };
         });
 
-        resizer.addEventListener('touchstart', function(e) {
+        newResizer.addEventListener('touchstart', function(e) {
             e.preventDefault();
             e.stopPropagation();
             const touch = e.touches[0];
@@ -427,19 +430,16 @@
         }
     }
 
-    // Improved snap function to make elements stick together like magnets
     function snapToNearbyElements(el, distance) {
         const others = document.querySelectorAll('.magnet, .note');
         const elRect = el.getBoundingClientRect();
         let snapped = false;
         
-        // Check for snapping to the edges of other elements
         others.forEach(other => {
-            if (other === el) return; // Skip self
+            if (other === el) return;
             
             const oRect = other.getBoundingClientRect();
             
-            // Calculate edges for both elements
             const elEdges = {
                 left: elRect.left,
                 right: elRect.right,
@@ -454,45 +454,35 @@
                 bottom: oRect.bottom
             };
             
-            // Horizontal snapping
-            // Snap left edge to right edge
             if (Math.abs(elEdges.left - otherEdges.right) < distance) {
                 el.style.left = (otherEdges.right) + 'px';
                 snapped = true;
             }
-            // Snap right edge to left edge
             else if (Math.abs(elEdges.right - otherEdges.left) < distance) {
                 el.style.left = (otherEdges.left - elRect.width) + 'px';
                 snapped = true;
             }
-            // Align left edges
             else if (Math.abs(elEdges.left - otherEdges.left) < distance) {
                 el.style.left = otherEdges.left + 'px';
                 snapped = true;
             }
-            // Align right edges
             else if (Math.abs(elEdges.right - otherEdges.right) < distance) {
                 el.style.left = (otherEdges.right - elRect.width) + 'px';
                 snapped = true;
             }
             
-            // Vertical snapping
-            // Snap top edge to bottom edge
             if (Math.abs(elEdges.top - otherEdges.bottom) < distance) {
                 el.style.top = (otherEdges.bottom) + 'px';
                 snapped = true;
             }
-            // Snap bottom edge to top edge
             else if (Math.abs(elEdges.bottom - otherEdges.top) < distance) {
                 el.style.top = (otherEdges.top - elRect.height) + 'px';
                 snapped = true;
             }
-            // Align top edges
             else if (Math.abs(elEdges.top - otherEdges.top) < distance) {
                 el.style.top = otherEdges.top + 'px';
                 snapped = true;
             }
-            // Align bottom edges
             else if (Math.abs(elEdges.bottom - otherEdges.bottom) < distance) {
                 el.style.top = (otherEdges.bottom - elRect.height) + 'px';
                 snapped = true;
@@ -590,6 +580,101 @@
             scheduleSave();
         }
     }
+    
+    function openGifModal(button) {
+        currentGifTarget = button.closest('.magnet');
+        document.getElementById('gifModal').style.display = 'block';
+        document.getElementById('gifSearchInput').focus();
+        document.getElementById('gifResults').innerHTML = '';
+    }
+    
+    function closeGifModal() {
+        document.getElementById('gifModal').style.display = 'none';
+        currentGifTarget = null;
+    }
+    
+    function searchGifs() {
+        const searchTerm = document.getElementById('gifSearchInput').value.trim();
+        if (!searchTerm) return;
+        
+        const gifResults = document.getElementById('gifResults');
+        gifResults.innerHTML = '<div class="loading">Searching for GIFs...</div>';
+        
+        fetch(`/tenor-proxy?q=${encodeURIComponent(searchTerm)}&key=${TENOR_API_KEY}&limit=20`)
+            .then(response => {
+                if (!response.ok) throw new Error('Network response was not ok');
+                return response.json();
+            })
+            .then(data => {
+                if (!data.results || data.results.length === 0) {
+                    gifResults.innerHTML = '<div class="no-results">No GIFs found. Try another search term.</div>';
+                    return;
+                }
+                
+                gifResults.innerHTML = '';
+                data.results.forEach(gif => {
+                    const gifItem = document.createElement('div');
+                    gifItem.className = 'gif-item';
+                    
+                    const img = document.createElement('img');
+                    img.src = gif.media[0].gif.preview;
+                    img.alt = gif.title;
+                    img.setAttribute('data-url', gif.media[0].gif.url);
+                    
+                    gifItem.appendChild(img);
+                    gifItem.addEventListener('click', function() {
+                        selectGif(gif.media[0].gif.url);
+                    });
+                    
+                    gifResults.appendChild(gifItem);
+                });
+            })
+            .catch(error => {
+                console.error('Error searching for GIFs:', error);
+                gifResults.innerHTML = '<div class="error">Failed to load GIFs. Please try again later.</div>';
+            });
+    }
+    
+    function selectGif(gifUrl) {
+        if (!currentGifTarget) return;
+        
+        const container = currentGifTarget.querySelector('.content-container');
+        container.innerHTML = '<div class="loading">Loading GIF...</div>';
+        
+        const img = document.createElement('img');
+        img.onload = function() {
+            container.innerHTML = '';
+            container.appendChild(img);
+            
+            const buttonContainer = currentGifTarget.querySelector('.button-container');
+            if (buttonContainer) {
+                buttonContainer.remove();
+            }
+            closeGifModal();
+            scheduleSave();
+        };
+        
+        img.onerror = function() {
+            container.innerHTML = '<div class="error">Failed to load GIF</div>';
+            closeGifModal();
+        };
+        
+        img.src = gifUrl;
+        img.alt = "Tenor GIF";
+        img.style.maxWidth = "100%";
+        img.style.maxHeight = "100%";
+    }
+    
+    function debouncedSearch() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(searchGifs, 500);
+    }
+    
+    document.getElementById('gifSearchInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            searchGifs();
+        }
+    });
     </script>
 </body>
 </html>
