@@ -182,19 +182,6 @@ input:checked + .slider:before {
     transform: translateX(26px);
 }
 
-/* Magnetism toggle specific styles */
-#magnetismToggle + .slider {
-    background-color: #ff9800;
-}
-
-#magnetismToggle:checked + .slider {
-    background-color: #2196F3;
-}
-
-#magnetismToggle:focus + .slider {
-    box-shadow: 0 0 1px #2196F3;
-}
-
 /* Dark mode styles */
 body.dark-mode {
     color: #f0f0f0;
@@ -637,4 +624,76 @@ body.dark-mode .menu-item:hover {
 body.dark-mode .prompt {
     background-color: #1a237e;
     color: #e3f2fd;
+}
+
+/* Connection error notice */
+.connection-error-notice {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #f44336;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    z-index: 3000;
+    font-weight: bold;
+    text-align: center;
+    animation: fadeIn 0.3s;
+}
+
+/* Notification styling */
+.notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: white;
+    border-left: 4px solid #2196F3;
+    color: #333;
+    padding: 12px 20px;
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    z-index: 3000;
+    max-width: 300px;
+    font-size: 14px;
+    opacity: 0;
+    transform: translateX(20px);
+    transition: opacity 0.3s, transform 0.3s;
+}
+
+.notification.info {
+    border-left-color: #2196F3;
+}
+
+.notification.warning {
+    border-left-color: #ff9800;
+}
+
+.notification.error {
+    border-left-color: #f44336;
+}
+
+.notification.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.notification strong {
+    display: block;
+    margin-bottom: 5px;
+}
+
+body.dark-mode .notification {
+    background-color: #333;
+    color: #fff;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(20px); }
+    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+body.dark-mode .connection-error-notice {
+    background-color: #b71c1c;
 }

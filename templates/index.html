@@ -5,20 +5,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 </head>
-<body>
-    <!-- Session Modal -->
-    <div id="sessionModal" class="modal">
-        <div class="modal-content">
-            <h2>Whiteboard Web App</h2>
-            <p>Enter a session name to start or join a already established whiteboard:</p>
-            <div class="search-container">
-                <input type="text" id="sessionInput" placeholder="Session name (e.g. myproject123)" required>
-                <button onclick="joinSession()">Join / Create</button>
-            </div>
-            <p class="session-info">Session names are private and case-sensitive.</p>
-        </div>
-    </div>
-
+<body onload="initializeDarkMode()">
     <div class="controls">
         <button id="addMagnetBtn" onclick="addMagnet()">Add Magnet</button>
         <button onclick="addNote()">Add Note</button>
@@ -28,13 +15,6 @@
             <input type="checkbox" id="darkModeToggle" onchange="toggleDarkMode()">
             <span class="slider"></span>
         </label>
-        <span>Magnetism:</span>
-        <label class="switch">
-            <input type="checkbox" id="magnetismToggle" onchange="toggleMagnetism()" checked>
-            <span class="slider"></span>
-        </label>
-        <span class="session-indicator" id="sessionBadge"></span>
-        <button class="exit-session-btn" onclick="exitSession()">Exit</button>
         <button class="reset-btn" onclick="resetWhiteboard()">Reset</button>
     </div>
 
@@ -61,299 +41,277 @@
     const TENOR_API_KEY = "LIVDSRZULELA"; // Demo API key, replace with your own
     let currentGifTarget = null;
     let debounceTimer;
-    let currentSession = null;
-    let lastServerSync = 0;  // Timestamp of last server sync
-    let syncInterval = null; // Reference to polling interval
-    let syncDelay = 3000;    // Poll every 3 seconds
-    let pendingSave = false; // Track if we have unsaved changes
-    let magnetismEnabled = true; // Default magnetism to enabled
-    
-    // Check if user is in a session on page load
-    window.onload = function() {
-        // Load dark mode preference
-        if (localStorage.getItem('darkMode') === 'true') {
+
+    // Generate & store userId in localStorage if none exists
+    let userId = localStorage.getItem('userId');
+    if (!userId) {
+        userId = 'user_' + Date.now() + '_' + Math.floor(Math.random()*1000);
+        localStorage.setItem('userId', userId);
+    }
+
+    // Load user whiteboard on page load
+    window.addEventListener('load', () => {
+        loadWhiteboardData();
+    });
+
+    // Save whiteboard automatically when elements change or on beforeunload
+    function scheduleSave() {
+        saveWhiteboardData();
+    }
+
+    window.addEventListener('beforeunload', () => {
+        saveWhiteboardData();
+    });
+
+    function loadWhiteboardData() {
+        fetch(`/api/whiteboard?userId=${encodeURIComponent(userId)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (!data || !data.elements) return;
+            data.elements.forEach(element => {
+                if (element.type === 'magnet') {
+                    const magnet = document.createElement('div');
+                    magnet.className = 'magnet';
+                    magnet.style.left = element.left;
+                    magnet.style.top = element.top;
+                    magnet.style.width = element.width;
+                    magnet.style.height = element.height;
+                    magnet.innerHTML = element.content;
+                    setupElementEvents(magnet);
+                    document.getElementById('whiteboard').appendChild(magnet);
+                } else if (element.type === 'note') {
+                    const note = document.createElement('div');
+                    note.className = 'note';
+                    note.style.left = element.left;
+                    note.style.top = element.top;
+                    note.style.width = element.width;
+                    note.style.height = element.height;
+                    note.innerHTML = element.content;
+                    setupElementEvents(note);
+                    document.getElementById('whiteboard').appendChild(note);
+                }
+            });
+        })
+        .catch(err => console.error('Load error:', err));
+    }
+
+    function saveWhiteboardData() {
+        const elements = [];
+        document.querySelectorAll('.magnet, .note').forEach(el => {
+            const rect = el.getBoundingClientRect();
+            elements.push({
+                type: el.classList.contains('magnet') ? 'magnet' : 'note',
+                left: el.style.left,
+                top: el.style.top,
+                width: rect.width + 'px', // Use actual width
+                height: rect.height + 'px', // Use actual height
+                content: el.innerHTML
+            });
+        });
+
+        fetch('/api/whiteboard', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ userId, elements })
+        })
+        .catch(err => console.error('Save error:', err));
+    }
+
+    function toggleDarkMode() {
+        document.body.classList.toggle('dark-mode');
+        localStorage.setItem('darkMode', document.body.classList.contains('dark-mode'));
+    }
+
+    function initializeDarkMode() {
+        const darkPref = localStorage.getItem('darkMode');
+        if (darkPref === 'true') {
             document.body.classList.add('dark-mode');
             document.getElementById('darkModeToggle').checked = true;
         }
+    }
+
+    // Keep track of attached elements
+    let attachedElements = {};
+
+    function startDrag(e, element) {
+        e.preventDefault();
+        selectedElement = element;
+        isDragging = true;
+        const rect = element.getBoundingClientRect();
+        selectedElement.offsetX = e.clientX - rect.left;
+        selectedElement.offsetY = e.clientY - rect.top;
         
-        // Load magnetism preference
-        if (localStorage.getItem('magnetism') === 'false') {
-            magnetismEnabled = false;
-            document.getElementById('magnetismToggle').checked = false;
+        // If dragging a note, find attached magnets
+        if (element.classList.contains('note')) {
+            attachedElements = findAttachedElements(element);
         }
+    }
+    
+    // Find magnets that are attached to this element
+    function findAttachedElements(element) {
+        const attached = {};
+        const elementRect = element.getBoundingClientRect();
+        const snapDistance = 15; // Same as snap distance
         
-        // Check for existing session
-        currentSession = localStorage.getItem('currentSession');
-        if (currentSession) {
-            loadSessionFromServer(currentSession.replace('whiteboard_', ''));
-        } else {
-            showSessionModal();
+        document.querySelectorAll('.magnet').forEach(magnet => {
+            const magnetRect = magnet.getBoundingClientRect();
+            
+            // Check if this magnet is attached to the element (close enough to be considered attached)
+            const isAttachedHorizontally = 
+                Math.abs(magnetRect.left - elementRect.right) < snapDistance || 
+                Math.abs(magnetRect.right - elementRect.left) < snapDistance ||
+                Math.abs(magnetRect.left - elementRect.left) < snapDistance ||
+                Math.abs(magnetRect.right - elementRect.right) < snapDistance;
+                
+            const isAttachedVertically = 
+                Math.abs(magnetRect.top - elementRect.bottom) < snapDistance || 
+                Math.abs(magnetRect.bottom - elementRect.top) < snapDistance ||
+                Math.abs(magnetRect.top - elementRect.top) < snapDistance ||
+                Math.abs(magnetRect.bottom - elementRect.bottom) < snapDistance;
+                
+            if (isAttachedHorizontally || isAttachedVertically) {
+                // Store the relative position of the magnet to the note
+                attached[magnet.id || Date.now() + Math.random()] = {
+                    element: magnet,
+                    offsetX: elementRect.left - magnetRect.left,
+                    offsetY: elementRect.top - magnetRect.top
+                };
+                
+                // Ensure magnet has an ID for tracking
+                if (!magnet.id) {
+                    magnet.id = 'magnet-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+                }
+            }
+        });
+        
+        return attached;
+    }
+
+    document.onmousemove = (e) => {
+        if (isDragging && selectedElement) {
+            const originalLeft = parseInt(selectedElement.style.left) || 0;
+            const originalTop = parseInt(selectedElement.style.top) || 0;
+
+            const newLeft = e.clientX - selectedElement.offsetX;
+            const newTop = e.clientY - selectedElement.offsetY;
+
+            const maxLeft = window.innerWidth - 50;
+            const maxTop = window.innerHeight - 50;
+
+            const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
+            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
+
+            // Move the selected element
+            selectedElement.style.left = boundedLeft + 'px';
+            selectedElement.style.top = boundedTop + 'px';
+            
+            // Also move any attached elements
+            if (selectedElement.classList.contains('note')) {
+                Object.values(attachedElements).forEach(info => {
+                    const magnet = info.element;
+                    // Move the magnet maintaining the same relative position
+                    const magnetLeft = boundedLeft - info.offsetX;
+                    const magnetTop = boundedTop - info.offsetY;
+                    
+                    // Ensure the magnet stays within bounds
+                    const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
+                    const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
+                    
+                    magnet.style.left = Math.max(0, Math.min(magnetLeft, maxMagnetLeft)) + 'px';
+                    magnet.style.top = Math.max(0, Math.min(magnetTop, maxMagnetTop)) + 'px';
+                });
+            }
+            
+            snapToNearbyElements(selectedElement, 15); // Reduced snap range for more precision
+            scheduleSave();
+        } else if (isResizing && resizeHandle) {
+            const element = resizeHandle.element;
+            const width = resizeHandle.startWidth + (e.clientX - resizeHandle.startX);
+            const height = resizeHandle.startHeight + (e.clientY - resizeHandle.startY);
+
+            if (width > 100) element.style.width = width + 'px';
+            if (height > 100) element.style.height = height + 'px';
+            scheduleSave();
         }
     };
-    
-    function showSessionModal() {
-        document.getElementById('sessionModal').style.display = 'block';
-        document.getElementById('sessionInput').focus();
-    }
-    
-    function joinSession() {
-        const sessionName = document.getElementById('sessionInput').value.trim();
-        if (!sessionName) return;
-        
-        currentSession = `whiteboard_${sessionName}`;
-        localStorage.setItem('currentSession', currentSession);
-        document.getElementById('sessionBadge').textContent = sessionName;
-        document.getElementById('sessionModal').style.display = 'none';
-        
-        // Load existing data from server
-        loadSessionFromServer(sessionName);
-    }
-    
-    function exitSession() {
-        if (confirm('Exit this session? You can rejoin later with the same session name.')) {
-            localStorage.removeItem('currentSession');
-            document.getElementById('whiteboard').innerHTML = '';
+
+    document.addEventListener('touchmove', function(e) {
+        if (isDragging && selectedElement) {
+            e.preventDefault();
+
+            const touch = e.touches[0];
+
+            const originalLeft = parseInt(selectedElement.style.left) || 0;
+            const originalTop = parseInt(selectedElement.style.top) || 0;
+
+            const newLeft = touch.clientX - selectedElement.offsetX;
+            const newTop = touch.clientY - selectedElement.offsetY;
+
+            const maxLeft = window.innerWidth - 50;
+            const maxTop = window.innerHeight - 50;
+
+            const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
+            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
+
+            // Move the selected element
+            selectedElement.style.left = boundedLeft + 'px';
+            selectedElement.style.top = boundedTop + 'px';
             
-            // Stop the sync process
-            if (syncInterval) {
-                clearInterval(syncInterval);
-                syncInterval = null;
-            }
-            
-            showSessionModal();
-        }
-    }
-    
-    function loadSessionFromServer(sessionName) {
-        // Display the session name
-        document.getElementById('sessionBadge').textContent = sessionName;
-        
-        // Clear current whiteboard
-        document.getElementById('whiteboard').innerHTML = '';
-        
-        // Fetch data from server
-        fetch(`/api/whiteboard/${sessionName}`)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                return response.json();
-            })
-            .then(data => {
-                const elements = data.data || [];
-                
-                // If empty, this is a new session
-                if (elements.length === 0) {
-                    console.log('Created new session:', sessionName);
-                } else {
-                    console.log('Loaded existing session:', sessionName);
+            // Also move any attached elements
+            if (selectedElement.classList.contains('note')) {
+                Object.values(attachedElements).forEach(info => {
+                    const magnet = info.element;
+                    // Move the magnet maintaining the same relative position
+                    const magnetLeft = boundedLeft - info.offsetX;
+                    const magnetTop = boundedTop - info.offsetY;
                     
-                    // Render the elements
-                    elements.forEach(elem => {
-                        if (elem.type === 'magnet') {
-                            createMagnetFromData(elem);
-                        } else if (elem.type === 'note') {
-                            createNoteFromData(elem);
-                        }
-                    });
-                }
-                
-                // Start sync process
-                startSyncProcess(sessionName);
-            })
-            .catch(error => {
-                console.error('Error loading session:', error);
-                alert('Error loading session data. Please try again.');
-            });
-    }
-    
-    function startSyncProcess(sessionName) {
-        // Clear any existing interval
-        if (syncInterval) {
-            clearInterval(syncInterval);
-        }
-        
-        // Start polling for updates
-        lastServerSync = Date.now() / 1000;  // Current timestamp in seconds
-        
-        syncInterval = setInterval(() => {
-            // Poll for updates
-            fetch(`/api/whiteboard/${sessionName}/poll?last_updated=${lastServerSync}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.has_updates && !isDragging && !isResizing) {
-                        // Update our timestamp
-                        lastServerSync = data.server_timestamp;
-                        
-                        // Load the latest data
-                        loadSessionFromServer(sessionName);
-                    }
+                    // Ensure the magnet stays within bounds
+                    const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
+                    const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
                     
-                    // If we have pending changes, save them
-                    if (pendingSave) {
-                        saveToServer();
-                        pendingSave = false;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking for updates:', error);
+                    magnet.style.left = Math.max(0, Math.min(magnetLeft, maxMagnetLeft)) + 'px';
+                    magnet.style.top = Math.max(0, Math.min(magnetTop, maxMagnetTop)) + 'px';
                 });
-        }, syncDelay);
-    }
-    
-    function saveToServer() {
-        if (!currentSession) return;
-        
-        const elements = [];
-        // Save magnets
-        document.querySelectorAll('.magnet').forEach(magnet => {
-            const rect = magnet.getBoundingClientRect();
-            const contentContainer = magnet.querySelector('.content-container');
-            const hasContent = contentContainer && contentContainer.innerHTML.trim() !== '';
-            
-            const data = {
-                type: 'magnet',
-                left: magnet.style.left,
-                top: magnet.style.top,
-                width: magnet.style.width || rect.width + 'px',
-                height: magnet.style.height || rect.height + 'px',
-                content: contentContainer ? contentContainer.innerHTML : '',
-                hasContent: hasContent // Track whether the magnet has content
-            };
-            elements.push(data);
-        });
-        
-        // Save notes
-        document.querySelectorAll('.note').forEach(note => {
-            const rect = note.getBoundingClientRect();
-            const data = {
-                type: 'note',
-                left: note.style.left,
-                top: note.style.top,
-                width: note.style.width || rect.width + 'px',
-                height: note.style.height || rect.height + 'px',
-                content: note.querySelector('div[contenteditable="true"]').innerHTML
-            };
-            elements.push(data);
-        });
-        
-        // Save to server
-        const sessionName = currentSession.replace('whiteboard_', '');
-        fetch(`/api/whiteboard/${sessionName}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ data: elements })
-        })
-        .then(response => {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
             }
-            return response.json();
-        })
-        .then(data => {
-            console.log('Saved to server:', data);
-            // Also save to localStorage as backup
-            localStorage.setItem(currentSession, JSON.stringify(elements));
-            // Update our last sync time
-            lastServerSync = Date.now() / 1000;
-        })
-        .catch(error => {
-            console.error('Error saving to server:', error);
-            // Set pending flag to try again later
-            pendingSave = true;
-            // Save to localStorage as backup
-            localStorage.setItem(currentSession, JSON.stringify(elements));
-        });
-    }
-    
-    function saveCurrentSession() {
-        if (!currentSession) return;
-        
-        // Mark that we have changes to save
-        pendingSave = true;
-        
-        // Don't save immediately to avoid too many requests
-        // The sync process will pick up and save the changes
-    }
-    
-    function createMagnetFromData(data) {
-        const magnet = document.createElement('div');
-        magnet.className = 'magnet';
-        magnet.style.left = data.left;
-        magnet.style.top = data.top;
-        magnet.style.width = data.width;
-        magnet.style.height = data.height;
-        magnet.style.zIndex = 1000; // Ensure magnets are on top
-        
-        // Check if the magnet already has content
-        if (data.hasContent) {
-            magnet.innerHTML = `
-                <button class="close-btn" onclick="removeElement(this)">X</button>
-                <div class="magnet-header"><span class="drag-icon">≡</span></div>
-                <div class="content-container">${data.content}</div>
-                <div class="resize-handle"></div>
-                <div class="context-menu">
-                    <div class="menu-item" onclick="requestClipboardPaste(this.closest('.magnet').querySelector('.paste-btn'))">Paste from clipboard</div>
-                </div>
-            `;
-        } else {
-            const fileInputId = 'file-input-' + Date.now(); // Create unique ID for file input
             
-            magnet.innerHTML = `
-                <button class="close-btn" onclick="removeElement(this)">X</button>
-                <div class="magnet-header"><span class="drag-icon">≡</span></div>
-                <input type="file" id="${fileInputId}" accept="image/*" onchange="updateImage(this)" style="display:none">
-                <div class="button-container">
-                    <button class="small-btn upload-btn" onclick="document.getElementById('${fileInputId}').click()">Upload Image</button>
-                    <button class="small-btn gif-btn" onclick="openGifModal(this)">Search GIFs</button>
-                    <button class="small-btn paste-btn" onclick="requestClipboardPaste(this)">Paste</button>
-                </div>
-                <div class="content-container">${data.content}</div>
-                <div class="resize-handle"></div>
-                <div class="context-menu">
-                    <div class="menu-item" onclick="requestClipboardPaste(this.closest('.magnet').querySelector('.paste-btn'))">Paste from clipboard</div>
-                </div>
-            `;
+            snapToNearbyElements(selectedElement, 20);
+            scheduleSave();
+        } else if (isResizing && resizeHandle) {
+            const touch = e.touches[0];
+            const element = resizeHandle.element;
+            const width = resizeHandle.startWidth + (touch.clientX - resizeHandle.startX);
+            const height = resizeHandle.startHeight + (touch.clientY - resizeHandle.startY);
+
+            if (width > 100) element.style.width = width + 'px';
+            if (height > 100) element.style.height = height + 'px';
+            scheduleSave();
         }
-        
-        setupElementEvents(magnet);
-        document.getElementById('whiteboard').appendChild(magnet);
-    }
-    
-    function createNoteFromData(data) {
-        const note = document.createElement('div');
-        note.className = 'note';
-        note.style.left = data.left;
-        note.style.top = data.top;
-        note.style.width = data.width;
-        note.style.height = data.height;
-        note.style.zIndex = 100; // Lower z-index than magnets
-        
-        note.innerHTML = `
-            <button class="close-btn" onclick="removeElement(this)">X</button>
-            <div class="note-header"><span class="drag-icon">≡</span></div>
-            <div contenteditable="true" style="padding:10px; min-height:50px; height:calc(100% - 50px); overflow-y:auto">${data.content}</div>
-            <div class="resize-handle"></div>
-        `;
-        
-        setupElementEvents(note);
-        document.getElementById('whiteboard').appendChild(note);
-        
-        // Setup autosave for note edits
-        note.querySelector('[contenteditable="true"]').addEventListener('input', function() {
-            saveCurrentSession();
-        });
-    }
+    }, { passive: false });
+
+    document.addEventListener('touchend', function(e) {
+        isDragging = false;
+        isResizing = false;
+        selectedElement = null;
+        resizeHandle = null;
+        attachedElements = {}; // Clear the attached elements
+    });
+
+    document.onmouseup = () => {
+        isDragging = false;
+        isResizing = false;
+        selectedElement = null;
+        resizeHandle = null;
+        attachedElements = {}; // Clear the attached elements
+    };
 
     function addMagnet() {
         const magnet = document.createElement('div');
         magnet.className = 'magnet';
-        magnet.style.zIndex = 1000; // Ensure magnets are on top
-        
-        const fileInputId = 'file-input-' + Date.now(); // Create unique ID for file input
-        
+        magnet.style.zIndex = 1000;
+        magnet.id = 'magnet-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+
+        const fileInputId = 'file-input-' + Date.now();
+
         magnet.innerHTML = `
             <button class="close-btn" onclick="removeElement(this)">X</button>
             <div class="magnet-header"><span class="drag-icon">≡</span></div>
@@ -369,51 +327,44 @@
                 <div class="menu-item" onclick="requestClipboardPaste(this.closest('.magnet').querySelector('.paste-btn'))">Paste from clipboard</div>
             </div>
         `;
-        
+
         magnet.style.left = (Math.random() * (window.innerWidth - 200)) + 'px';
         magnet.style.top = (Math.random() * (window.innerHeight - 200)) + 'px';
-        
+
         setupElementEvents(magnet);
         document.getElementById('whiteboard').appendChild(magnet);
-        saveCurrentSession();
+        scheduleSave();
     }
 
     function addNote() {
         const note = document.createElement('div');
         note.className = 'note';
-        note.style.zIndex = 100; // Lower z-index than magnets
-        
+        note.style.zIndex = 100;
+        note.id = 'note-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+
         note.innerHTML = `
             <button class="close-btn" onclick="removeElement(this)">X</button>
             <div class="note-header"><span class="drag-icon">≡</span></div>
             <div contenteditable="true" style="padding:10px; min-height:50px; height:calc(100% - 50px); overflow-y:auto"></div>
             <div class="resize-handle"></div>
         `;
-        
+
         note.style.left = (Math.random() * (window.innerWidth - 200)) + 'px';
         note.style.top = (Math.random() * (window.innerHeight - 200)) + 'px';
-        
+
         setupElementEvents(note);
         document.getElementById('whiteboard').appendChild(note);
-        
-        // Setup autosave for note edits
-        note.querySelector('[contenteditable="true"]').addEventListener('input', function() {
-            saveCurrentSession();
-        });
-        
-        saveCurrentSession();
+        scheduleSave();
     }
-    
+
     function setupElementEvents(element) {
-        // Setup drag events
         const header = element.querySelector('.magnet-header, .note-header');
         header.addEventListener('mousedown', function(e) {
             startDrag(e, element);
         });
-        
-        // Add touch event for mobile devices
+
         header.addEventListener('touchstart', function(e) {
-            e.preventDefault(); // Prevent default touch behavior
+            e.preventDefault();
             const touch = e.touches[0];
             const touchEvent = {
                 clientX: touch.clientX,
@@ -422,8 +373,7 @@
             };
             startDrag(touchEvent, element);
         }, { passive: false });
-        
-        // Setup resize events
+
         const resizer = element.querySelector('.resize-handle');
         resizer.addEventListener('mousedown', function(e) {
             e.preventDefault();
@@ -437,8 +387,7 @@
                 startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10)
             };
         });
-        
-        // Add touch event for mobile resize
+
         resizer.addEventListener('touchstart', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -453,27 +402,23 @@
             };
         }, { passive: false });
 
-        // Setup context menu for right-click
         if (element.classList.contains('magnet')) {
             element.addEventListener('contextmenu', function(e) {
                 e.preventDefault();
-                
+
                 const contextMenu = element.querySelector('.context-menu');
                 if (contextMenu) {
-                    // Position the context menu at the cursor
                     contextMenu.style.left = (e.clientX - element.getBoundingClientRect().left) + 'px';
                     contextMenu.style.top = (e.clientY - element.getBoundingClientRect().top) + 'px';
                     contextMenu.style.display = 'block';
-                    
-                    // Close the menu when clicking elsewhere
+
                     const closeMenu = function(event) {
                         if (!contextMenu.contains(event.target)) {
                             contextMenu.style.display = 'none';
                             document.removeEventListener('click', closeMenu);
                         }
                     };
-                    
-                    // Add a small delay to avoid immediate closing
+
                     setTimeout(() => {
                         document.addEventListener('click', closeMenu);
                     }, 100);
@@ -482,233 +427,95 @@
         }
     }
 
-    function startDrag(e, element) {
-        e.preventDefault();
-        selectedElement = element;
-        isDragging = true;
-        const rect = element.getBoundingClientRect();
-        selectedElement.offsetX = e.clientX - rect.left;
-        selectedElement.offsetY = e.clientY - rect.top;
-    }
-
-    const SNAP_DISTANCE = 20; // Reduced for more precise snapping
-
-    document.onmousemove = (e) => {
-        if (isDragging && selectedElement) {
-            // Store original position to calculate movement delta
-            const originalLeft = parseInt(selectedElement.style.left) || 0;
-            const originalTop = parseInt(selectedElement.style.top) || 0;
+    // Improved snap function to make elements stick together like magnets
+    function snapToNearbyElements(el, distance) {
+        const others = document.querySelectorAll('.magnet, .note');
+        const elRect = el.getBoundingClientRect();
+        let snapped = false;
+        
+        // Check for snapping to the edges of other elements
+        others.forEach(other => {
+            if (other === el) return; // Skip self
             
-            // Calculate new position
-            const newLeft = e.clientX - selectedElement.offsetX;
-            const newTop = e.clientY - selectedElement.offsetY;
+            const oRect = other.getBoundingClientRect();
             
-            // Keep elements within viewport boundaries
-            const maxLeft = window.innerWidth - 50; // At least 50px of element remains visible
-            const maxTop = window.innerHeight - 50;
+            // Calculate edges for both elements
+            const elEdges = {
+                left: elRect.left,
+                right: elRect.right,
+                top: elRect.top,
+                bottom: elRect.bottom
+            };
             
-            const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
-            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
+            const otherEdges = {
+                left: oRect.left,
+                right: oRect.right,
+                top: oRect.top,
+                bottom: oRect.bottom
+            };
             
-            // Apply new position
-            selectedElement.style.left = boundedLeft + 'px';
-            selectedElement.style.top = boundedTop + 'px';
-
-            // Calculate the movement delta
-            const deltaLeft = boundedLeft - originalLeft;
-            const deltaTop = boundedTop - originalTop;
-            
-            // Find and move attached magnets if this is a note
-            if (selectedElement.classList.contains('note')) {
-                moveAttachedMagnets(selectedElement, deltaLeft, deltaTop);
+            // Horizontal snapping
+            // Snap left edge to right edge
+            if (Math.abs(elEdges.left - otherEdges.right) < distance) {
+                el.style.left = (otherEdges.right) + 'px';
+                snapped = true;
+            }
+            // Snap right edge to left edge
+            else if (Math.abs(elEdges.right - otherEdges.left) < distance) {
+                el.style.left = (otherEdges.left - elRect.width) + 'px';
+                snapped = true;
+            }
+            // Align left edges
+            else if (Math.abs(elEdges.left - otherEdges.left) < distance) {
+                el.style.left = otherEdges.left + 'px';
+                snapped = true;
+            }
+            // Align right edges
+            else if (Math.abs(elEdges.right - otherEdges.right) < distance) {
+                el.style.left = (otherEdges.right - elRect.width) + 'px';
+                snapped = true;
             }
             
-            // Get current dimensions for snapping calculations
-            const selectedRect = selectedElement.getBoundingClientRect();
-            
-            // Check for snapping to other elements
-            const allElements = document.querySelectorAll('.magnet, .note');
-            allElements.forEach(otherElement => {
-                if (otherElement !== selectedElement) {
-                    // Snap logic and attachment detection
-                    snapElements(selectedElement, otherElement);
-                }
-            });
-            
-        } else if (isResizing && resizeHandle) {
-            const element = resizeHandle.element;
-            const width = resizeHandle.startWidth + (e.clientX - resizeHandle.startX);
-            const height = resizeHandle.startHeight + (e.clientY - resizeHandle.startY);
-            
-            if (width > 100) element.style.width = width + 'px';
-            if (height > 100) element.style.height = height + 'px';
-        }
-    };
-
-    // Add touch event handlers to document
-    document.addEventListener('touchmove', function(e) {
-        if (isDragging && selectedElement) {
-            e.preventDefault(); // Prevent page scrolling during drag
-            
-            const touch = e.touches[0];
-            
-            // Store original position to calculate movement delta
-            const originalLeft = parseInt(selectedElement.style.left) || 0;
-            const originalTop = parseInt(selectedElement.style.top) || 0;
-            
-            // Calculate new position
-            const newLeft = touch.clientX - selectedElement.offsetX;
-            const newTop = touch.clientY - selectedElement.offsetY;
-            
-            // Keep elements within viewport boundaries
-            const maxLeft = window.innerWidth - 50;
-            const maxTop = window.innerHeight - 50;
-            
-            const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
-            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
-            
-            // Apply new position
-            selectedElement.style.left = boundedLeft + 'px';
-            selectedElement.style.top = boundedTop + 'px';
-
-            // Calculate the movement delta
-            const deltaLeft = boundedLeft - originalLeft;
-            const deltaTop = boundedTop - originalTop;
-            
-            // Find and move attached magnets if this is a note
-            if (selectedElement.classList.contains('note')) {
-                moveAttachedMagnets(selectedElement, deltaLeft, deltaTop);
+            // Vertical snapping
+            // Snap top edge to bottom edge
+            if (Math.abs(elEdges.top - otherEdges.bottom) < distance) {
+                el.style.top = (otherEdges.bottom) + 'px';
+                snapped = true;
             }
-            
-            // Get current dimensions for snapping calculations
-            const selectedRect = selectedElement.getBoundingClientRect();
-            
-            // Check for snapping to other elements
-            const allElements = document.querySelectorAll('.magnet, .note');
-            allElements.forEach(otherElement => {
-                if (otherElement !== selectedElement) {
-                    // Snap logic and attachment detection
-                    snapElements(selectedElement, otherElement);
-                }
-            });
-        } else if (isResizing && resizeHandle) {
-            e.preventDefault(); // Prevent page scrolling during resize
-            
-            const touch = e.touches[0];
-            const element = resizeHandle.element;
-            const width = resizeHandle.startWidth + (touch.clientX - resizeHandle.startX);
-            const height = resizeHandle.startHeight + (touch.clientY - resizeHandle.startY);
-            
-            if (width > 100) element.style.width = width + 'px';
-            if (height > 100) element.style.height = height + 'px';
-        }
-    }, { passive: false });
-
-    document.addEventListener('touchend', function(e) {
-        if (isDragging || isResizing) {
-            saveCurrentSession();
-        }
-        isDragging = false;
-        isResizing = false;
-        selectedElement = null;
-        resizeHandle = null;
-    });
-
-    // Function to find and move magnets that are attached to the given note
-    function moveAttachedMagnets(note, deltaLeft, deltaTop) {
-        // Skip moving attached elements if magnetism is disabled
-        if (!magnetismEnabled) return;
-        
-        const noteRect = note.getBoundingClientRect();
-        
-        document.querySelectorAll('.magnet').forEach(magnet => {
-            const magnetRect = magnet.getBoundingClientRect();
-            
-            // Check all four edge attachments with some tolerance
-            if (isAttached(noteRect, magnetRect)) {
-                // Move the magnet by the same delta
-                const currentLeft = parseInt(magnet.style.left) || 0;
-                const currentTop = parseInt(magnet.style.top) || 0;
-                
-                magnet.style.left = (currentLeft + deltaLeft) + 'px';
-                magnet.style.top = (currentTop + deltaTop) + 'px';
+            // Snap bottom edge to top edge
+            else if (Math.abs(elEdges.bottom - otherEdges.top) < distance) {
+                el.style.top = (otherEdges.top - elRect.height) + 'px';
+                snapped = true;
+            }
+            // Align top edges
+            else if (Math.abs(elEdges.top - otherEdges.top) < distance) {
+                el.style.top = otherEdges.top + 'px';
+                snapped = true;
+            }
+            // Align bottom edges
+            else if (Math.abs(elEdges.bottom - otherEdges.bottom) < distance) {
+                el.style.top = (otherEdges.bottom - elRect.height) + 'px';
+                snapped = true;
             }
         });
+        
+        return snapped;
     }
 
-    // Helper function to check if two elements are attached
-    function isAttached(rect1, rect2) {
-        // Edge proximity detection with tolerance
-        const ATTACH_TOLERANCE = SNAP_DISTANCE;
-        
-        // Check if rect2 is attached to any edge of rect1
-        const isLeftAttached = Math.abs(rect2.right - rect1.left) < ATTACH_TOLERANCE;
-        const isRightAttached = Math.abs(rect2.left - rect1.right) < ATTACH_TOLERANCE;
-        const isTopAttached = Math.abs(rect2.bottom - rect1.top) < ATTACH_TOLERANCE;
-        const isBottomAttached = Math.abs(rect2.top - rect1.bottom) < ATTACH_TOLERANCE;
-        
-        // Also check for partial overlap along edges
-        const isVerticalOverlap = (rect2.top < rect1.bottom && rect2.bottom > rect1.top);
-        const isHorizontalOverlap = (rect2.left < rect1.right && rect2.right > rect1.left);
-        
-        // For left/right attachment, must have some vertical overlap
-        const isValidLeftRightAttachment = (isLeftAttached || isRightAttached) && isVerticalOverlap;
-        // For top/bottom attachment, must have some horizontal overlap
-        const isValidTopBottomAttachment = (isTopAttached || isBottomAttached) && isHorizontalOverlap;
-        
-        return isValidLeftRightAttachment || isValidTopBottomAttachment;
-    }
-
-    // Function to snap elements together
-    function snapElements(element1, element2) {
-        // Skip snapping if magnetism is disabled
-        if (!magnetismEnabled) return;
-        
-        const rect1 = element1.getBoundingClientRect();
-        const rect2 = element2.getBoundingClientRect();
-        
-        // Check left-right snapping
-        if (Math.abs(rect1.left - rect2.right) < SNAP_DISTANCE &&
-            (rect1.top < rect2.bottom && rect1.bottom > rect2.top)) {
-            element1.style.left = rect2.right + 'px';
-        }
-        
-        // Check right-left snapping
-        if (Math.abs(rect1.right - rect2.left) < SNAP_DISTANCE &&
-            (rect1.top < rect2.bottom && rect1.bottom > rect2.top)) {
-            element1.style.left = (rect2.left - rect1.width) + 'px';
-        }
-        
-        // Check top-bottom snapping
-        if (Math.abs(rect1.top - rect2.bottom) < SNAP_DISTANCE &&
-            (rect1.left < rect2.right && rect1.right > rect2.left)) {
-            element1.style.top = rect2.bottom + 'px';
-        }
-        
-        // Check bottom-top snapping
-        if (Math.abs(rect1.bottom - rect2.top) < SNAP_DISTANCE &&
-            (rect1.left < rect2.right && rect1.right > rect2.left)) {
-            element1.style.top = (rect2.top - rect1.height) + 'px';
-        }
-    }
-
-    // Function to recover elements that have moved outside the visible area
     function recoverElements() {
         let recoveredElements = 0;
         const whiteboard = document.getElementById('whiteboard');
-        const maxRight = window.innerWidth - 200; // Keep elements within view
+        const maxRight = window.innerWidth - 200;
         const maxBottom = window.innerHeight - 200;
-        
+
         document.querySelectorAll('.magnet, .note').forEach(element => {
             const rect = element.getBoundingClientRect();
             let needsRepositioning = false;
-            
-            // Check if element is mostly offscreen or drag handle is inaccessible
+
             if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight) {
                 needsRepositioning = true;
             }
-            
-            // Specifically check if header is offscreen
+
             const header = element.querySelector('.magnet-header, .note-header');
             if (header) {
                 const headerRect = header.getBoundingClientRect();
@@ -716,66 +523,39 @@
                     needsRepositioning = true;
                 }
             }
-            
+
             if (needsRepositioning) {
-                // Reposition to a visible area
                 element.style.left = Math.min(Math.max(50, rect.left), maxRight) + 'px';
                 element.style.top = Math.min(Math.max(50, rect.top), maxBottom) + 'px';
                 recoveredElements++;
             }
         });
-        
+
         if (recoveredElements > 0) {
             alert(`Recovered ${recoveredElements} element(s) that were difficult to access.`);
-            saveCurrentSession();
         } else {
             alert('No elements needed recovery.');
         }
+        scheduleSave();
     }
-
-    document.onmouseup = () => {
-        if (isDragging || isResizing) {
-            saveCurrentSession();
-        }
-        isDragging = false;
-        isResizing = false;
-        selectedElement = null;
-        resizeHandle = null;
-    };
-
-    document.addEventListener('touchend', function(e) {
-        const now = Date.now();
-        const DOUBLE_TAP_DELAY = 300;
-        
-        if (lastTap && (now - lastTap) < DOUBLE_TAP_DELAY) {
-            e.preventDefault();
-        }
-        
-        lastTap = now;
-    }, { passive: false });
-
-    // Initialize lastTap variable
-    let lastTap = 0;
 
     function removeElement(element) {
         const parent = element.parentElement;
         parent.remove();
-        saveCurrentSession();
+        scheduleSave();
     }
 
     function updateImage(input) {
         if (input.files && input.files[0]) {
             const file = input.files[0];
             const reader = new FileReader();
-            
-            // Show loading indicator in the magnet
+
             const magnet = input.closest('.magnet');
             const container = magnet.querySelector('.content-container');
             container.innerHTML = '<div class="loading">Loading image...</div>';
-            
+
             reader.onload = (e) => {
                 try {
-                    // Clear previous content and add new image
                     container.innerHTML = ''; 
                     const img = document.createElement('img');
                     img.src = e.target.result;
@@ -783,435 +563,33 @@
                     img.style.maxWidth = "100%";
                     img.style.maxHeight = "100%";
                     container.appendChild(img);
-                    
-                    console.log("Image loaded successfully");
-                    
-                    // Remove the buttons once we have content
+
                     const buttonContainer = magnet.querySelector('.button-container');
                     if (buttonContainer) {
                         buttonContainer.remove();
                     }
-                    
-                    // Save the updated state
-                    saveToServer();
+                    scheduleSave();
                 } catch (error) {
                     console.error("Error processing image:", error);
                     container.innerHTML = '<div class="error">Failed to load image</div>';
                 }
             };
-            
-            // Error handling for file reading
+
             reader.onerror = (error) => {
                 console.error("Error reading file:", error);
                 container.innerHTML = '<div class="error">Failed to load image</div>';
             };
-            
-            // Start reading the file
+
             reader.readAsDataURL(file);
         }
     }
-    
-    function toggleDarkMode() {
-        document.body.classList.toggle('dark-mode');
-        // Save preference to localStorage
-        localStorage.setItem('darkMode', document.body.classList.contains('dark-mode'));
-    }
-    
-    function toggleMagnetism() {
-        magnetismEnabled = document.getElementById('magnetismToggle').checked;
-        localStorage.setItem('magnetism', magnetismEnabled);
-        console.log('Magnetism ' + (magnetismEnabled ? 'enabled' : 'disabled'));
-    }
-    
-    // Tenor GIF functionality
-    function openGifModal(buttonElement) {
-        // Store the entire magnet element for better access
-        currentGifTarget = buttonElement.closest('.magnet');
-        document.getElementById('gifModal').style.display = 'block';
-        const searchInput = document.getElementById('gifSearchInput');
-        searchInput.value = '';
-        document.getElementById('gifResults').innerHTML = '';
-        
-        // Focus the input field for immediate typing
-        setTimeout(() => searchInput.focus(), 100);
-    }
 
-    function closeGifModal() {
-        document.getElementById('gifModal').style.display = 'none';
-    }
-
-    // Debounce function to limit API calls while typing
-    function debouncedSearch() {
-        clearTimeout(debounceTimer);
-        const searchTerm = document.getElementById('gifSearchInput').value.trim();
-        
-        // Clear results if search is empty
-        if (!searchTerm) {
-            document.getElementById('gifResults').innerHTML = '';
-            return;
-        }
-        
-        // Show "Searching..." indicator immediately
-        if (searchTerm.length > 1) {
-            document.getElementById('gifResults').innerHTML = '<div class="loading">Searching...</div>';
-        }
-        
-        // Wait for 500ms of no typing before searching
-        debounceTimer = setTimeout(() => {
-            if (searchTerm.length > 1) {
-                searchGifs();
-            }
-        }, 500);
-    }
-
-    function searchGifs() {
-        const searchTerm = document.getElementById('gifSearchInput').value.trim();
-        if (!searchTerm) return;
-
-        const resultsContainer = document.getElementById('gifResults');
-        resultsContainer.innerHTML = '<div class="loading">Loading...</div>';
-        
-        // First try using the proxy endpoint
-        fetch(`/tenor-proxy?q=${encodeURIComponent(searchTerm)}&key=${TENOR_API_KEY}&limit=16`)
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                return response.json();
-            })
-            .then(handleGifResults)
-            .catch(error => {
-                console.log("Proxy failed, falling back to direct API:", error);
-                
-                // Fallback to direct API call
-                fetch(`https://api.tenor.com/v1/search?q=${encodeURIComponent(searchTerm)}&key=${TENOR_API_KEY}&limit=16`)
-                    .then(response => {
-                        if (!response.ok) {
-                            throw new Error(`API error: ${response.status}`);
-                        }
-                        return response.json();
-                    })
-                    .then(handleGifResults)
-                    .catch(error => {
-                        console.error('Error fetching GIFs:', error);
-                        resultsContainer.innerHTML = `<div class="error">Error loading GIFs: ${error.message}</div>`;
-                    });
-            });
-    }
-
-    function handleGifResults(data) {
-        const resultsContainer = document.getElementById('gifResults');
-        resultsContainer.innerHTML = '';
-        
-        if (!data.results || data.results.length === 0) {
-            resultsContainer.innerHTML = '<div class="no-results">No GIFs found</div>';
-            return;
-        }
-        
-        data.results.forEach(result => {
-            const gifItem = document.createElement('div');
-            gifItem.className = 'gif-item';
-            
-            // Make sure we can access the media objects correctly
-            let gifUrl = '';
-            let previewUrl = '';
-            
-            if (result.media && result.media.length > 0 && result.media[0].gif) {
-                gifUrl = result.media[0].gif.url;
-                // Try to get smaller preview if available
-                previewUrl = result.media[0].tinygif ? result.media[0].tinygif.url : gifUrl;
-            } else if (result.url) {
-                // Fallback to a URL directly on the result if available
-                gifUrl = result.url;
-                previewUrl = result.url;
-            } else {
-                console.warn("Could not find GIF URL in result", result);
-                return; // Skip this result
-            }
-            
-            const gifImg = document.createElement('img');
-            gifImg.src = previewUrl;
-            gifImg.dataset.fullGif = gifUrl;
-            gifImg.alt = result.title || "GIF";
-            
-            // Add click event directly to the container for better touch support
-            gifItem.onclick = function() {
-                selectGif(gifUrl);
-            };
-            
-            gifItem.appendChild(gifImg);
-            resultsContainer.appendChild(gifItem);
-        });
-    }
-
-    function selectGif(gifUrl) {
-        if (!currentGifTarget) {
-            console.error("No target element for GIF");
-            alert("Error: Couldn't add GIF. Please try again.");
-            return;
-        }
-        
-        try {
-            // Get the content container
-            const container = currentGifTarget.querySelector('.content-container');
-            if (!container) {
-                throw new Error("Could not find content container");
-            }
-            
-            // Clear the container and add the new GIF
-            container.innerHTML = '';
-            
-            const img = new Image();
-            img.onload = function() {
-                console.log("GIF loaded successfully");
-                saveCurrentSession();
-            };
-            img.onerror = function() {
-                console.error("Failed to load GIF image:", gifUrl);
-                container.innerHTML = '<p>Failed to load GIF</p>';
-            };
-            img.src = gifUrl;
-            img.alt = "Tenor GIF";
-            img.style.maxWidth = "100%";  // Ensure image fits container width
-            img.style.maxHeight = "100%"; // Ensure image fits container height
-            container.appendChild(img);
-            
-            // Remove the buttons
-            const buttonContainer = currentGifTarget.querySelector('.button-container');
-            if (buttonContainer) {
-                buttonContainer.remove();
-            }
-            
-            // Close the modal and reset target
-            document.getElementById('gifModal').style.display = 'none';
-        } catch (error) {
-            console.error("Error adding GIF:", error);
-            alert("Failed to add GIF. Please try again.");
-        }
-    }
-
-    // Remove the keypress event and let the oninput handle it
-    document.addEventListener('DOMContentLoaded', function() {
-        // Initialize any additional event listeners after DOM is loaded
-        const searchInput = document.getElementById('gifSearchInput');
-        
-        // Fallback for older browsers that might not fully support oninput
-        searchInput.addEventListener('keyup', function(e) {
-            if (e.key === 'Enter') {
-                searchGifs();
-            }
-        });
-    });
-
-    // Session input key handler
-    document.getElementById('sessionInput').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') {
-            joinSession();
-        }
-    });
-
-    // Override the reset button function
     function resetWhiteboard() {
         if (confirm('Are you sure you want to reset the whiteboard? This will remove all items.')) {
-            // Clear the whiteboard
             document.getElementById('whiteboard').innerHTML = '';
-            
-            // Save the empty state to server
-            saveToServer();
-            
-            console.log('Whiteboard has been reset');
+            scheduleSave();
         }
     }
-
-    function createFoodMagnet(imageUrl) {
-        // Creates a magnet with a pre-chosen image
-        const magnet = document.createElement('div');
-        magnet.className = 'magnet';
-        magnet.style.zIndex = 1000; // Ensure magnets are on top
-        
-        magnet.innerHTML = `
-            <button class="close-btn" onclick="removeElement(this)">X</button>
-            <div class="magnet-header"><span class="drag-icon">≡</span></div>
-            <input type="file" accept="image/*" onchange="updateImage(this)" style="display:none">
-            <div class="button-container">
-                <button class="small-btn upload-btn" onclick="this.parentElement.querySelector('input[type=file]').click()">Upload Image</button>
-                <button class="small-btn gif-btn" onclick="openGifModal(this)">Search GIFs</button>
-            </div>
-            <div class="content-container">
-                <img src="${imageUrl}" alt="Food Magnet" style="max-width:100%; max-height:100%;">
-            </div>
-            <div class="resize-handle"></div>
-        `;
-        setupElementEvents(magnet);
-        document.getElementById('whiteboard').appendChild(magnet);
-        saveCurrentSession();
-    }
-
-    // Function to handle paste request
-    function requestClipboardPaste(buttonElement) {
-        const magnet = buttonElement.closest('.magnet');
-        if (!magnet) return;
-        
-        const container = magnet.querySelector('.content-container');
-        if (!container) return;
-        
-        // Show loading message while waiting for paste
-        container.innerHTML = '<div class="prompt">Press Ctrl+V to paste or click and paste</div>';
-        
-        // Create a contenteditable element to receive the paste
-        const pasteArea = document.createElement('div');
-        pasteArea.contentEditable = true;
-        pasteArea.style.position = 'absolute';
-        pasteArea.style.opacity = '0';
-        pasteArea.style.width = '1px';
-        pasteArea.style.height = '1px';
-        document.body.appendChild(pasteArea);
-        
-        // Focus the paste area and show instructions
-        pasteArea.focus();
-        
-        // Listen for paste event
-        pasteArea.addEventListener('paste', function(e) {
-            e.preventDefault();
-            
-            // Change message to loading
-            container.innerHTML = '<div class="loading">Processing paste...</div>';
-            
-            // Process clipboard data
-            const clipboardData = e.clipboardData || window.clipboardData;
-            
-            // Check for image in clipboard
-            if (clipboardData.items) {
-                for (let i = 0; i < clipboardData.items.length; i++) {
-                    if (clipboardData.items[i].type.indexOf('image') !== -1) {
-                        const blob = clipboardData.items[i].getAsFile();
-                        const reader = new FileReader();
-                        
-                        reader.onload = function(event) {
-                            // Add image to container
-                            container.innerHTML = '';
-                            const img = document.createElement('img');
-                            img.src = event.target.result;
-                            img.style.maxWidth = '100%';
-                            img.style.maxHeight = '100%';
-                            container.appendChild(img);
-                            
-                            // Remove the buttons once we have content
-                            const buttonContainer = magnet.querySelector('.button-container');
-                            if (buttonContainer) {
-                                buttonContainer.remove();
-                            }
-                            
-                            // Save the updated state
-                            saveToServer();
-                        };
-                        
-                        reader.readAsDataURL(blob);
-                        break;
-                    }
-                }
-            }
-            
-            // If no image was found, check for text
-            if (container.innerHTML.includes('Processing paste...')) {
-                const text = clipboardData.getData('text');
-                if (text) {
-                    container.innerHTML = text;
-                    saveToServer();
-                } else {
-                    container.innerHTML = '<div class="error">No image or text found in clipboard</div>';
-                    
-                    // Restore buttons if paste failed
-                    setTimeout(() => {
-                        if (container.querySelector('.error')) {
-                            container.innerHTML = '';
-                        }
-                    }, 3000);
-                }
-            }
-            
-            // Clean up
-            pasteArea.remove();
-        });
-        
-        // If user clicks elsewhere without pasting, clean up
-        document.addEventListener('click', function cleanupPaste(event) {
-            if (event.target !== pasteArea && !event.target.closest('.paste-btn')) {
-                if (container.innerHTML.includes('Press Ctrl+V')) {
-                    container.innerHTML = '';
-                }
-                pasteArea.remove();
-                document.removeEventListener('click', cleanupPaste);
-            }
-        });
-        
-        // Also support direct clipboard API if available
-        if (navigator.clipboard && navigator.clipboard.read) {
-            navigator.clipboard.read()
-                .then(clipboardItems => {
-                    for (const clipboardItem of clipboardItems) {
-                        for (const type of clipboardItem.types) {
-                            if (type.startsWith('image/')) {
-                                clipboardItem.getType(type)
-                                    .then(blob => {
-                                        const reader = new FileReader();
-                                        reader.onload = function(event) {
-                                            container.innerHTML = '';
-                                            const img = document.createElement('img');
-                                            img.src = event.target.result;
-                                            img.style.maxWidth = '100%';
-                                            img.style.maxHeight = '100%';
-                                            container.appendChild(img);
-                                            
-                                            // Remove the buttons once we have content
-                                            const buttonContainer = magnet.querySelector('.button-container');
-                                            if (buttonContainer) {
-                                                buttonContainer.remove();
-                                            }
-                                            
-                                            // Save the updated state
-                                            saveToServer();
-                                        };
-                                        reader.readAsDataURL(blob);
-                                        pasteArea.remove();
-                                    });
-                                return;
-                            }
-                        }
-                    }
-                })
-                .catch(err => {
-                    console.log("Clipboard read failed, waiting for manual paste", err);
-                    // Continue with manual paste approach
-                });
-        }
-        
-        // Add keyboard shortcut
-        const handleKeyDown = function(e) {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-                // Let the paste event handler above handle it
-                document.removeEventListener('keydown', handleKeyDown);
-            }
-            // Also allow Escape to cancel
-            if (e.key === 'Escape') {
-                container.innerHTML = '';
-                pasteArea.remove();
-                document.removeEventListener('keydown', handleKeyDown);
-            }
-        };
-        
-        document.addEventListener('keydown', handleKeyDown);
-    }
-    
-    // Close all context menus when clicking outside
-    document.addEventListener('click', function(e) {
-        const contextMenus = document.querySelectorAll('.context-menu');
-        contextMenus.forEach(menu => {
-            if (menu.style.display === 'block' && !menu.contains(e.target)) {
-                menu.style.display = 'none';
-            }
-        });
-    });
     </script>
 </body>
 </html>
