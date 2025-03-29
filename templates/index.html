@@ -41,6 +41,15 @@
     const TENOR_API_KEY = "LIVDSRZULELA"; // Demo API key, replace with your own
     let currentGifTarget = null;
     let debounceTimer;
+    
+    // Zoom variables
+    let currentScale = 1;
+    let initialDistance = 0;
+    let isZooming = false;
+    let zoomOriginX = 0;
+    let zoomOriginY = 0;
+    let panOffsetX = 0;
+    let panOffsetY = 0;
 
     // Generate & store userId in localStorage if none exists
     let userId = localStorage.getItem('userId');
@@ -52,6 +61,14 @@
     // Load user whiteboard on page load
     window.addEventListener('load', () => {
         loadWhiteboardData();
+        
+        // Add reset zoom button to controls
+        const controlsDiv = document.querySelector('.controls');
+        const resetZoomBtn = document.createElement('button');
+        resetZoomBtn.textContent = 'Reset Zoom';
+        resetZoomBtn.onclick = resetZoom;
+        resetZoomBtn.className = 'zoom-reset-btn';
+        controlsDiv.appendChild(resetZoomBtn);
     });
 
     // Save whiteboard automatically when elements change or on beforeunload
@@ -192,8 +209,8 @@
             const newLeft = touch.clientX - selectedElement.offsetX;
             const newTop = touch.clientY - selectedElement.offsetY;
 
-            const maxLeft = window.innerWidth - 50;
-            const maxTop = window.innerHeight - 50;
+            const maxLeft = Math.max(window.innerWidth - 50, document.getElementById('whiteboard').scrollWidth - 50);
+            const maxTop = Math.max(window.innerHeight - 50, document.getElementById('whiteboard').scrollHeight - 50);
 
             const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
             const boundedTop = Math.max(0, Math.min(newTop, maxTop));
@@ -203,14 +220,94 @@
             
             scheduleSave();
         } else if (isResizing && resizeHandle) {
+            e.preventDefault();
             const touch = e.touches[0];
             const element = resizeHandle.element;
+            
             const width = resizeHandle.startWidth + (touch.clientX - resizeHandle.startX);
             const height = resizeHandle.startHeight + (touch.clientY - resizeHandle.startY);
-
+            
             if (width > 100) element.style.width = width + 'px';
             if (height > 100) element.style.height = height + 'px';
+            
+            const rect = element.getBoundingClientRect();
+            if (rect.right > window.innerWidth) {
+                const adjustedWidth = width - (rect.right - window.innerWidth + 10);
+                if (adjustedWidth > 100) element.style.width = adjustedWidth + 'px';
+            }
+            
             scheduleSave();
+        } else if (e.touches.length === 2) {
+            e.preventDefault();
+            
+            if (!isZooming) {
+                isZooming = true;
+                initialDistance = getDistance(e.touches[0], e.touches[1]);
+                const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                zoomOriginX = midX;
+                zoomOriginY = midY;
+            } else {
+                const currentDistance = getDistance(e.touches[0], e.touches[1]);
+                const newScale = currentScale * (currentDistance / initialDistance);
+                
+                const limitedScale = Math.min(Math.max(0.5, newScale), 3);
+                
+                if (limitedScale !== currentScale) {
+                    const whiteboard = document.getElementById('whiteboard');
+                    const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+                    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                    
+                    whiteboard.style.transformOrigin = '0 0';
+                    whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${limitedScale})`;
+                    
+                    currentScale = limitedScale;
+                }
+            }
+        }
+    }, { passive: false });
+
+    document.addEventListener('touchend', function(e) {
+        endDrag();
+        
+        if (e.touches.length < 2) {
+            isZooming = false;
+        }
+    });
+
+    function getDistance(touch1, touch2) {
+        const dx = touch1.clientX - touch2.clientX;
+        const dy = touch1.clientY - touch2.clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    document.addEventListener('touchstart', function(e) {
+        if (currentScale > 1 && e.touches.length === 1 && e.target.id === 'whiteboard') {
+            e.preventDefault();
+            const touch = e.touches[0];
+            whiteboard.dataset.panStartX = touch.clientX;
+            whiteboard.dataset.panStartY = touch.clientY;
+        }
+    }, { passive: false });
+    
+    document.addEventListener('touchmove', function(e) {
+        if (currentScale > 1 && e.touches.length === 1 && 
+            e.target.id === 'whiteboard' && 
+            whiteboard.dataset.panStartX && whiteboard.dataset.panStartY) {
+            
+            e.preventDefault();
+            const touch = e.touches[0];
+            const deltaX = touch.clientX - whiteboard.dataset.panStartX;
+            const deltaY = touch.clientY - whiteboard.dataset.panStartY;
+            
+            panOffsetX += deltaX;
+            panOffsetY += deltaY;
+            
+            const whiteboard = document.getElementById('whiteboard');
+            whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${currentScale})`;
+            
+            whiteboard.dataset.panStartX = touch.clientX;
+            whiteboard.dataset.panStartY = touch.clientY;
         }
     }, { passive: false });
 
@@ -324,10 +421,8 @@
             }, element);
         }, { passive: false });
 
-        // Add drag functionality to header as well
         const header = element.querySelector('.magnet-header, .note-header');
         header.addEventListener('mousedown', function(e) {
-            // Don't start drag if clicked on pin button
             if (e.target.classList.contains('pin-btn')) return;
             
             if (!element.classList.contains('pinned')) {
@@ -336,7 +431,6 @@
         });
 
         header.addEventListener('touchstart', function(e) {
-            // Don't start drag if touched on pin button
             if (e.target.classList.contains('pin-btn')) return;
             
             if (!element.classList.contains('pinned')) {
@@ -351,33 +445,27 @@
             }
         }, { passive: false });
 
-        // Set up the pin button with proper event handlers
         const pinBtn = element.querySelector('.pin-btn');
         if (pinBtn) {
-            // Remove any existing event listeners
             const newPinBtn = pinBtn.cloneNode(true);
             pinBtn.parentNode.replaceChild(newPinBtn, pinBtn);
             
-            // Add event handlers that work consistently
             newPinBtn.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 togglePin(element);
             });
             
-            // Fix for mobile - prevent touchstart from triggering parent events
             newPinBtn.addEventListener('touchstart', function(e) {
                 e.stopPropagation();
             }, { passive: false });
             
-            // Add explicit touch handling for mobile
             newPinBtn.addEventListener('touchend', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 togglePin(element);
             }, { passive: false });
             
-            // Set initial state if already pinned
             if (element.classList.contains('pinned')) {
                 newPinBtn.innerText = "📍";
                 newPinBtn.style.color = "#4CAF50"; 
@@ -408,7 +496,6 @@
             });
         }
 
-        // Check if element is already pinned (from loaded data)
         if (element.classList.contains('pinned')) {
             const dragHandle = element.querySelector('.drag-handle');
             if (dragHandle) dragHandle.style.display = 'none';
@@ -416,6 +503,42 @@
             const header = element.querySelector('.magnet-header, .note-header');
             if (header) header.style.cursor = 'default';
         }
+
+        const resizer = element.querySelector('.resize-handle');
+        
+        const newResizer = resizer.cloneNode();
+        resizer.parentNode.replaceChild(newResizer, resizer);
+        
+        newResizer.addEventListener('mousedown', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            isResizing = true;
+            resizeHandle = {
+                element: element,
+                startX: e.clientX,
+                startY: e.clientY,
+                startWidth: parseInt(document.defaultView.getComputedStyle(element).width, 10),
+                startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10),
+                startLeft: parseInt(element.style.left || '0', 10),
+                startTop: parseInt(element.style.top || '0', 10)
+            };
+        });
+
+        newResizer.addEventListener('touchstart', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            const touch = e.touches[0];
+            isResizing = true;
+            resizeHandle = {
+                element: element,
+                startX: touch.clientX,
+                startY: touch.clientY,
+                startWidth: parseInt(document.defaultView.getComputedStyle(element).width, 10),
+                startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10),
+                startLeft: parseInt(element.style.left || '0', 10),
+                startTop: parseInt(element.style.top || '0', 10)
+            };
+        }, { passive: false });
     }
 
     function togglePin(element) {
@@ -428,19 +551,17 @@
             if (dragHandle) dragHandle.style.display = 'none';
             if (magnetHeader) magnetHeader.style.cursor = 'default';
             
-            // Visual feedback when pinned
             if (pinBtn) {
-                pinBtn.innerText = "📍"; // Change icon to look "pinned in"
-                pinBtn.style.color = "#4CAF50"; // Green color
+                pinBtn.innerText = "📍";
+                pinBtn.style.color = "#4CAF50";
             }
         } else {
             if (dragHandle) dragHandle.style.display = '';
             if (magnetHeader) magnetHeader.style.cursor = 'move';
             
-            // Reset pin appearance when unpinned
             if (pinBtn) {
-                pinBtn.innerText = "📌"; // Back to regular pin
-                pinBtn.style.color = ""; // Reset color
+                pinBtn.innerText = "📌";
+                pinBtn.style.color = "";
             }
         }
         scheduleSave();
@@ -449,14 +570,18 @@
     function recoverElements() {
         let recoveredElements = 0;
         const whiteboard = document.getElementById('whiteboard');
-        const maxRight = window.innerWidth - 200;
-        const maxBottom = window.innerHeight - 200;
+        const maxRight = Math.max(window.innerWidth - 200, whiteboard.scrollWidth - 200);
+        const maxBottom = Math.max(window.innerHeight - 200, whiteboard.scrollHeight - 200);
 
         document.querySelectorAll('.magnet, .note').forEach(element => {
             const rect = element.getBoundingClientRect();
             let needsRepositioning = false;
 
             if (rect.left < 0 || rect.top < 0 || rect.right > window.innerWidth || rect.bottom > window.innerHeight) {
+                needsRepositioning = true;
+            }
+            
+            if (parseInt(element.style.left) > maxRight || parseInt(element.style.top) > maxBottom) {
                 needsRepositioning = true;
             }
 
@@ -469,8 +594,8 @@
             }
 
             if (needsRepositioning) {
-                element.style.left = Math.min(Math.max(50, rect.left), maxRight) + 'px';
-                element.style.top = Math.min(Math.max(50, rect.top), maxBottom) + 'px';
+                element.style.left = Math.min(Math.max(50, parseInt(element.style.left) || rect.left), maxRight) + 'px';
+                element.style.top = Math.min(Math.max(50, parseInt(element.style.top) || rect.top), maxBottom) + 'px';
                 recoveredElements++;
             }
         });
@@ -533,6 +658,14 @@
             document.getElementById('whiteboard').innerHTML = '';
             scheduleSave();
         }
+    }
+    
+    function resetZoom() {
+        const whiteboard = document.getElementById('whiteboard');
+        whiteboard.style.transform = 'translate(0, 0) scale(1)';
+        currentScale = 1;
+        panOffsetX = 0;
+        panOffsetY = 0;
     }
     
     function openGifModal(button) {
