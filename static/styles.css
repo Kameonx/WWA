@@ -15,6 +15,11 @@ body {
     background-size: 20px 20px;
     cursor: default;
     transition: background-color 0.3s;
+    transform-origin: 0 0;
+    min-height: 100vh;
+    min-width: 100vw;
+    /* Support for zooming */
+    touch-action: none;
 }
 
 .controls {
@@ -418,29 +423,33 @@ body.dark-mode .error {
 /* Resize handle */
 .resize-handle {
     position: absolute;
-    width: 25px; /* Increased touch target */
-    height: 25px; /* Increased touch target */
+    width: 30px; /* Larger touch target */
+    height: 30px; /* Larger touch target */
     bottom: 0;
     right: 0;
     cursor: nwse-resize;
     background: transparent;
     touch-action: none; /* Disable browser handling of touches */
+    z-index: 10; /* Ensure it's above content */
 }
 
 .resize-handle::before {
     content: "";
     position: absolute;
-    right: 3px;
-    bottom: 3px;
-    width: 9px;
-    height: 9px;
-    border-right: 2px solid #777;
-    border-bottom: 2px solid #777;
-    opacity: 0.6;
+    right: 5px;
+    bottom: 5px;
+    width: 12px;
+    height: 12px;
+    border-right: 3px solid #777;
+    border-bottom: 3px solid #777;
+    opacity: 0.8;
 }
 
-.resize-handle:hover::before {
+.resize-handle:hover::before,
+.resize-handle:active::before {
     opacity: 1;
+    border-right: 3px solid #2196F3;
+    border-bottom: 3px solid #2196F3;
 }
 
 /* Style the drag handle */
@@ -617,6 +626,17 @@ button[onclick="recoverElements()"]hover {
     background-color: #0b7dda;
 }
 
+/* Zoom reset button */
+.zoom-reset-btn {
+    background-color: #2196F3;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.zoom-reset-btn:hover {
+    background-color: #0b7dda;
+}
+
 /* Additional mobile optimizations */
 @media (max-width: 768px) {
     .controls {
@@ -662,20 +682,23 @@ button[onclick="recoverElements()"]hover {
     }
     
     /* Increase resize handle size on mobile */
+    .resize-handle {
+        width: 40px;
+        height: 40px;
+    }
+    
     .resize-handle::before {
-        width: 12px;
-        height: 12px;
+        width: 15px;
+        height: 15px;
+        border-right: 4px solid #777;
+        border-bottom: 4px solid #777;
     }
     
-    .pin-btn {
-        font-size: 18px; /* Larger pin button on mobile */
-        padding: 8px; /* More touch area */
-    }
-    
-    /* Ensure no hover effects on mobile that could interfere with touch */
-    .pin-btn:hover {
-        transform: none;
-        box-shadow: none;
+    /* Visual feedback when touching resize handle */
+    .resize-handle:active::before {
+        background-color: rgba(33, 150, 243, 0.2);
+        border-right: 4px solid #2196F3;
+        border-bottom: 4px solid #2196F3;
     }
 }
 
