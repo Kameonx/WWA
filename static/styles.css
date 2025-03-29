@@ -20,6 +20,7 @@ body {
     min-width: 100vw;
     /* Support for zooming */
     touch-action: none;
+    will-change: transform, background-size; /* Optimize for transforms */
 }
 
 .controls {
@@ -33,6 +34,54 @@ body {
     box-shadow: 0 2px 5px rgba(0,0,0,0.2);
     display: flex;
     align-items: center;
+    transition: transform 0.3s ease;
+}
+
+.controls-hidden {
+    transform: translateX(-120%);
+}
+
+.toggle-controls-btn {
+    position: absolute;
+    right: -35px;
+    top: 10px; /* Position at the top instead of middle */
+    transform: none; /* Remove translateY since we're using fixed top */
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0 5px 5px 0;
+    background: white;
+    color: #333;
+    box-shadow: 3px 0 5px rgba(0,0,0,0.1);
+}
+
+.show-controls-btn {
+    position: fixed;
+    left: 0;
+    top: 10px; /* Position at the top instead of middle */
+    transform: none; /* Remove translateY since we're using fixed top */
+    width: 30px;
+    height: 40px; /* Reduced height to match position */
+    padding: 0;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0 5px 5px 0;
+    background: white;
+    color: #333;
+    box-shadow: 3px 0 5px rgba(0,0,0,0.1);
+    z-index: 1000;
+}
+
+body.dark-mode .toggle-controls-btn,
+body.dark-mode .show-controls-btn {
+    background: #333;
+    color: white;
 }
 
 #addMagnetBtn {
@@ -699,6 +748,26 @@ button[onclick="recoverElements()"]hover {
         background-color: rgba(33, 150, 243, 0.2);
         border-right: 4px solid #2196F3;
         border-bottom: 4px solid #2196F3;
+    }
+    
+    /* Make sure controls button is always visible */
+    .toggle-controls-btn {
+        right: -30px;
+        width: 25px;
+        height: 30px; /* Reduced height for mobile */
+        top: 5px; /* Position slightly lower on mobile */
+    }
+    
+    .show-controls-btn {
+        width: 25px;
+        height: 30px; /* Reduced height for mobile */
+        top: 5px; /* Position slightly lower on mobile */
+    }
+    
+    /* Prevent flickering during zoom/pan operations */
+    #whiteboard {
+        backface-visibility: hidden;
+        -webkit-backface-visibility: hidden;
     }
 }
 
