@@ -85,6 +85,9 @@ body {
     position: relative; /* Ensure it's in the stacking context */
     z-index: 5; /* Make sure it's above other content in the element */
     touch-action: none; /* Disable browser handling of touches */
+    display: flex; /* Add flex layout */
+    align-items: center; /* Vertically center items */
+    justify-content: space-between; /* Distribute space evenly */
 }
 
 .magnet-header:hover, .note-header:hover {
@@ -440,6 +443,78 @@ body.dark-mode .error {
     opacity: 1;
 }
 
+/* Style the drag handle */
+.drag-handle {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 15px;
+    height: 15px;
+    background-color: rgba(0, 0, 0, 0.2);
+    cursor: grab;
+    border-radius: 0 0 0 3px;
+    touch-action: none; /* Disable browser handling of touches */
+}
+
+.drag-handle:active {
+    cursor: grabbing;
+}
+
+/* Pinned state styles */
+.magnet.pinned, .note.pinned {
+    border-color: #4CAF50;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+
+.magnet.pinned .magnet-header,
+.note.pinned .note-header {
+    cursor: default;
+    background-color: transparent !important;
+    color: inherit !important;
+    opacity: 1;
+}
+
+.magnet.pinned .magnet-header .drag-icon,
+.note.pinned .note-header .drag-icon {
+    display: none !important;
+}
+
+/* Style the pin button */
+.pin-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 5px;  /* Increase padding for better touch target */
+    margin: 0;
+    margin-right: 5px;
+    color: #777;
+    opacity: 0.7;
+    transition: opacity 0.2s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent; /* Remove default mobile highlight */
+    border-radius: 50%; /* Make it round for better touch indication */
+}
+
+.pin-btn:hover {
+    opacity: 1;
+    transform: none;
+    box-shadow: none;
+}
+
+.pin-btn:active {
+    transform: scale(0.9); /* Visual feedback when pressed */
+    opacity: 1;
+}
+
+body.dark-mode .pin-btn {
+    color: #ddd;
+}
+
+.magnet.pinned .pin-btn, .note.pinned .pin-btn {
+    color: #4CAF50;
+    opacity: 1;
+}
+
 /* Session styles */
 .session-indicator {
     background-color: #4c68af;
@@ -578,6 +653,12 @@ button[onclick="recoverElements()"]hover {
     .magnet-header, .note-header {
         height: 24px;
         padding: 4px 8px;
+        background-color: rgba(241, 241, 241, 0.9);
+    }
+    
+    .drag-icon {
+        font-size: 16px;
+        display: block;
     }
     
     /* Increase resize handle size on mobile */
@@ -585,11 +666,28 @@ button[onclick="recoverElements()"]hover {
         width: 12px;
         height: 12px;
     }
+    
+    .pin-btn {
+        font-size: 18px; /* Larger pin button on mobile */
+        padding: 8px; /* More touch area */
+    }
+    
+    /* Ensure no hover effects on mobile that could interfere with touch */
+    .pin-btn:hover {
+        transform: none;
+        box-shadow: none;
+    }
 }
 
 /* Style to show active touch feedback */
 .touch-active {
     background-color: rgba(33, 150, 243, 0.2) !important;
+}
+
+/* Visual feedback for snapping */
+.snapped {
+    box-shadow: 0 0 10px 2px rgba(33, 150, 243, 0.7) !important;
+    transition: box-shadow 0.2s ease !important;
 }
 
 /* Context menu styles */
