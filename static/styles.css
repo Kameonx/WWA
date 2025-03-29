@@ -1,18 +1,39 @@
 body { 
     margin: 0; 
+    padding: 0;
     transition: background-color 0.3s;
     touch-action: none; /* Prevent browser handling of touch events during drag */
     -webkit-overflow-scrolling: touch; /* Improve scrolling on iOS */
     overscroll-behavior: none; /* Prevent pull-to-refresh on modern browsers */
-}
-
-#whiteboard {
-    position: relative;
-    width: 100vw;
-    height: 100vh;
+    overflow: hidden; /* Prevent scrolling outside the whiteboard */
+    width: 100%;
+    height: 100%;
+    position: fixed;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    /* Apply the same background as the whiteboard to the body for consistency */
     background-color: #f0f0f0;
     background-image: radial-gradient(#ccc 1px, transparent 1px);
     background-size: 20px 20px;
+}
+
+body.dark-mode {
+    color: #f0f0f0;
+    background-color: #222; /* Ensure body has dark background too */
+    background-image: radial-gradient(#444 1px, transparent 1px);
+}
+
+#whiteboard {
+    position: absolute; /* Changed from relative to absolute */
+    width: 100vw;
+    height: 100vh;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: transparent; /* Make transparent to show body background */
     cursor: default;
     transition: background-color 0.3s;
     transform-origin: 0 0;
@@ -20,7 +41,10 @@ body {
     min-width: 100vw;
     /* Support for zooming */
     touch-action: none;
-    will-change: transform, background-size; /* Optimize for transforms */
+    will-change: transform; /* Optimize for transforms */
+    overflow: visible; /* Allow content to extend beyond boundaries */
+    backface-visibility: hidden; /* Improve rendering performance */
+    -webkit-backface-visibility: hidden;
 }
 
 .controls {
@@ -250,13 +274,8 @@ input:checked + .slider:before {
 }
 
 /* Dark mode styles */
-body.dark-mode {
-    color: #f0f0f0;
-}
-
 body.dark-mode #whiteboard {
-    background-color: #222;
-    background-image: radial-gradient(#444 1px, transparent 1px);
+    background-color: transparent;
 }
 
 body.dark-mode .controls {
@@ -752,10 +771,11 @@ button[onclick="recoverElements()"]hover {
     
     /* Make sure controls button is always visible */
     .toggle-controls-btn {
-        right: -30px;
+        right: -5px; /* Bring it closer to the edge */
         width: 25px;
         height: 30px; /* Reduced height for mobile */
         top: 5px; /* Position slightly lower on mobile */
+        background: rgba(255, 255, 255, 0.8); /* Add a semi-transparent background */
     }
     
     .show-controls-btn {
@@ -768,6 +788,10 @@ button[onclick="recoverElements()"]hover {
     #whiteboard {
         backface-visibility: hidden;
         -webkit-backface-visibility: hidden;
+        transform-style: preserve-3d; /* Improve 3D transformations */
+        -webkit-transform-style: preserve-3d;
+        -webkit-perspective: 1000; /* Better rendering on iOS */
+        perspective: 1000;
     }
 }
 
