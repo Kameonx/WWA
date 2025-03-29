@@ -77,6 +77,11 @@
                     magnet.style.width = element.width;
                     magnet.style.height = element.height;
                     magnet.innerHTML = element.content;
+                    if (element.pinned) {
+                        magnet.classList.add('pinned');
+                        const dragHandle = magnet.querySelector('.drag-handle');
+                        if (dragHandle) dragHandle.style.display = 'none';
+                    }
                     setupElementEvents(magnet);
                     document.getElementById('whiteboard').appendChild(magnet);
                 } else if (element.type === 'note') {
@@ -87,6 +92,11 @@
                     note.style.width = element.width;
                     note.style.height = element.height;
                     note.innerHTML = element.content;
+                    if (element.pinned) {
+                        note.classList.add('pinned');
+                        const dragHandle = note.querySelector('.drag-handle');
+                        if (dragHandle) dragHandle.style.display = 'none';
+                    }
                     setupElementEvents(note);
                     document.getElementById('whiteboard').appendChild(note);
                 }
@@ -105,7 +115,8 @@
                 top: el.style.top || rect.top + 'px',
                 width: rect.width + 'px',
                 height: rect.height + 'px',
-                content: el.innerHTML
+                content: el.innerHTML,
+                pinned: el.classList.contains('pinned')
             });
         });
 
@@ -130,58 +141,21 @@
         }
     }
 
-    // Keep track of attached elements
-    let attachedElements = {};
-
     function startDrag(e, element) {
         e.preventDefault();
         selectedElement = element;
         isDragging = true;
         const rect = element.getBoundingClientRect();
-        selectedElement.offsetX = (e.clientX || e.touches[0].clientX) - rect.left;
-        selectedElement.offsetY = (e.clientY || e.touches[0].clientY) - rect.top;
+        
+        const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
+        const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
+        
+        selectedElement.offsetX = clientX - rect.left;
+        selectedElement.offsetY = clientY - rect.top;
+        
+        selectedElement.isMobileTouch = !!e.touches;
         
         element.classList.add('being-dragged');
-        
-        if (element.classList.contains('note')) {
-            attachedElements = findAttachedElements(element);
-        }
-    }
-    
-    function findAttachedElements(element) {
-        const attached = {};
-        const elementRect = element.getBoundingClientRect();
-        const snapDistance = 15;
-        
-        document.querySelectorAll('.magnet').forEach(magnet => {
-            const magnetRect = magnet.getBoundingClientRect();
-            
-            const isAttachedHorizontally = 
-                Math.abs(magnetRect.left - elementRect.right) < snapDistance || 
-                Math.abs(magnetRect.right - elementRect.left) < snapDistance ||
-                Math.abs(magnetRect.left - elementRect.left) < snapDistance ||
-                Math.abs(magnetRect.right - elementRect.right) < snapDistance;
-                
-            const isAttachedVertically = 
-                Math.abs(magnetRect.top - elementRect.bottom) < snapDistance || 
-                Math.abs(magnetRect.bottom - elementRect.top) < snapDistance ||
-                Math.abs(magnetRect.top - elementRect.top) < snapDistance ||
-                Math.abs(magnetRect.bottom - elementRect.bottom) < snapDistance;
-                
-            if (isAttachedHorizontally || isAttachedVertically) {
-                attached[magnet.id || Date.now() + Math.random()] = {
-                    element: magnet,
-                    offsetX: elementRect.left - magnetRect.left,
-                    offsetY: elementRect.top - magnetRect.top
-                };
-                
-                if (!magnet.id) {
-                    magnet.id = 'magnet-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
-                }
-            }
-        });
-        
-        return attached;
     }
 
     document.onmousemove = (e) => {
@@ -198,21 +172,6 @@
             selectedElement.style.left = boundedLeft + 'px';
             selectedElement.style.top = boundedTop + 'px';
             
-            if (selectedElement.classList.contains('note')) {
-                Object.values(attachedElements).forEach(info => {
-                    const magnet = info.element;
-                    const magnetLeft = boundedLeft - info.offsetX;
-                    const magnetTop = boundedTop - info.offsetY;
-                    
-                    const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
-                    const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
-                    
-                    magnet.style.left = Math.max(0, Math.min(magnetLeft, maxMagnetLeft)) + 'px';
-                    magnet.style.top = Math.max(0, Math.min(magnetTop, maxMagnetTop)) + 'px';
-                });
-            }
-            
-            snapToNearbyElements(selectedElement, 15);
             scheduleSave();
         } else if (isResizing && resizeHandle) {
             const element = resizeHandle.element;
@@ -242,21 +201,6 @@
             selectedElement.style.left = boundedLeft + 'px';
             selectedElement.style.top = boundedTop + 'px';
             
-            if (selectedElement.classList.contains('note')) {
-                Object.values(attachedElements).forEach(info => {
-                    const magnet = info.element;
-                    const magnetLeft = boundedLeft - info.offsetX;
-                    const magnetTop = boundedTop - info.offsetY;
-                    
-                    const maxMagnetLeft = window.innerWidth - parseInt(magnet.style.width || 150);
-                    const maxMagnetTop = window.innerHeight - parseInt(magnet.style.height || 100);
-                    
-                    magnet.style.left = Math.max(0, Math.min(magnetLeft, maxMagnetLeft)) + 'px';
-                    magnet.style.top = Math.max(0, Math.min(magnetTop, maxMagnetTop)) + 'px';
-                });
-            }
-            
-            snapToNearbyElements(selectedElement, 20);
             scheduleSave();
         } else if (isResizing && resizeHandle) {
             const touch = e.touches[0];
@@ -288,7 +232,6 @@
         isResizing = false;
         selectedElement = null;
         resizeHandle = null;
-        attachedElements = {};
     }
 
     document.addEventListener('touchend', function(e) {
@@ -309,7 +252,10 @@
 
         magnet.innerHTML = `
             <button class="close-btn" onclick="removeElement(this)">X</button>
-            <div class="magnet-header"><span class="drag-icon">≡</span></div>
+            <div class="magnet-header">
+                <button class="pin-btn">📌</button>
+                <span class="drag-icon">≡</span>
+            </div>
             <input type="file" id="${fileInputId}" accept="image/*" onchange="updateImage(this)" style="display:none">
             <div class="button-container">
                 <button class="small-btn upload-btn" onclick="document.getElementById('${fileInputId}').click()">Upload Image</button>
@@ -318,6 +264,7 @@
             </div>
             <div class="content-container"></div>
             <div class="resize-handle"></div>
+            <div class="drag-handle"></div>
             <div class="context-menu">
                 <div class="menu-item" onclick="requestClipboardPaste(this.closest('.magnet').querySelector('.paste-btn'))">Paste from clipboard</div>
             </div>
@@ -339,9 +286,13 @@
 
         note.innerHTML = `
             <button class="close-btn" onclick="removeElement(this)">X</button>
-            <div class="note-header"><span class="drag-icon">≡</span></div>
+            <div class="note-header">
+                <button class="pin-btn">📌</button>
+                <span class="drag-icon">≡</span>
+            </div>
             <div contenteditable="true" style="padding:10px; min-height:50px; height:calc(100% - 50px); overflow-y:auto"></div>
             <div class="resize-handle"></div>
+            <div class="drag-handle"></div>
         `;
 
         note.style.left = (Math.random() * (window.innerWidth - 200)) + 'px';
@@ -353,16 +304,16 @@
     }
 
     function setupElementEvents(element) {
-        const header = element.querySelector('.magnet-header, .note-header');
+        const dragHandle = element.querySelector('.drag-handle');
         
-        const newHeader = header.cloneNode(true);
-        header.parentNode.replaceChild(newHeader, header);
+        const newDragHandle = dragHandle.cloneNode();
+        dragHandle.parentNode.replaceChild(newDragHandle, dragHandle);
         
-        newHeader.addEventListener('mousedown', function(e) {
+        newDragHandle.addEventListener('mousedown', function(e) {
             startDrag(e, element);
         });
 
-        newHeader.addEventListener('touchstart', function(e) {
+        newDragHandle.addEventListener('touchstart', function(e) {
             e.preventDefault();
             const touch = e.touches[0];
             startDrag({
@@ -373,37 +324,65 @@
             }, element);
         }, { passive: false });
 
-        const resizer = element.querySelector('.resize-handle');
-        
-        const newResizer = resizer.cloneNode();
-        resizer.parentNode.replaceChild(newResizer, resizer);
-        
-        newResizer.addEventListener('mousedown', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            isResizing = true;
-            resizeHandle = {
-                element: element,
-                startX: e.clientX,
-                startY: e.clientY,
-                startWidth: parseInt(document.defaultView.getComputedStyle(element).width, 10),
-                startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10)
-            };
+        // Add drag functionality to header as well
+        const header = element.querySelector('.magnet-header, .note-header');
+        header.addEventListener('mousedown', function(e) {
+            // Don't start drag if clicked on pin button
+            if (e.target.classList.contains('pin-btn')) return;
+            
+            if (!element.classList.contains('pinned')) {
+                startDrag(e, element);
+            }
         });
 
-        newResizer.addEventListener('touchstart', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            const touch = e.touches[0];
-            isResizing = true;
-            resizeHandle = {
-                element: element,
-                startX: touch.clientX,
-                startY: touch.clientY,
-                startWidth: parseInt(document.defaultView.getComputedStyle(element).width, 10),
-                startHeight: parseInt(document.defaultView.getComputedStyle(element).height, 10)
-            };
+        header.addEventListener('touchstart', function(e) {
+            // Don't start drag if touched on pin button
+            if (e.target.classList.contains('pin-btn')) return;
+            
+            if (!element.classList.contains('pinned')) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                startDrag({
+                    clientX: touch.clientX,
+                    clientY: touch.clientY,
+                    preventDefault: function() {},
+                    touches: e.touches
+                }, element);
+            }
         }, { passive: false });
+
+        // Set up the pin button with proper event handlers
+        const pinBtn = element.querySelector('.pin-btn');
+        if (pinBtn) {
+            // Remove any existing event listeners
+            const newPinBtn = pinBtn.cloneNode(true);
+            pinBtn.parentNode.replaceChild(newPinBtn, pinBtn);
+            
+            // Add event handlers that work consistently
+            newPinBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                togglePin(element);
+            });
+            
+            // Fix for mobile - prevent touchstart from triggering parent events
+            newPinBtn.addEventListener('touchstart', function(e) {
+                e.stopPropagation();
+            }, { passive: false });
+            
+            // Add explicit touch handling for mobile
+            newPinBtn.addEventListener('touchend', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                togglePin(element);
+            }, { passive: false });
+            
+            // Set initial state if already pinned
+            if (element.classList.contains('pinned')) {
+                newPinBtn.innerText = "📍";
+                newPinBtn.style.color = "#4CAF50"; 
+            }
+        }
 
         if (element.classList.contains('magnet')) {
             element.addEventListener('contextmenu', function(e) {
@@ -428,68 +407,43 @@
                 }
             });
         }
+
+        // Check if element is already pinned (from loaded data)
+        if (element.classList.contains('pinned')) {
+            const dragHandle = element.querySelector('.drag-handle');
+            if (dragHandle) dragHandle.style.display = 'none';
+            
+            const header = element.querySelector('.magnet-header, .note-header');
+            if (header) header.style.cursor = 'default';
+        }
     }
 
-    function snapToNearbyElements(el, distance) {
-        const others = document.querySelectorAll('.magnet, .note');
-        const elRect = el.getBoundingClientRect();
-        let snapped = false;
-        
-        others.forEach(other => {
-            if (other === el) return;
+    function togglePin(element) {
+        element.classList.toggle('pinned');
+        const dragHandle = element.querySelector('.drag-handle');
+        const pinBtn = element.querySelector('.pin-btn');
+        const magnetHeader = element.querySelector('.magnet-header, .note-header');
+
+        if (element.classList.contains('pinned')) {
+            if (dragHandle) dragHandle.style.display = 'none';
+            if (magnetHeader) magnetHeader.style.cursor = 'default';
             
-            const oRect = other.getBoundingClientRect();
+            // Visual feedback when pinned
+            if (pinBtn) {
+                pinBtn.innerText = "📍"; // Change icon to look "pinned in"
+                pinBtn.style.color = "#4CAF50"; // Green color
+            }
+        } else {
+            if (dragHandle) dragHandle.style.display = '';
+            if (magnetHeader) magnetHeader.style.cursor = 'move';
             
-            const elEdges = {
-                left: elRect.left,
-                right: elRect.right,
-                top: elRect.top,
-                bottom: elRect.bottom
-            };
-            
-            const otherEdges = {
-                left: oRect.left,
-                right: oRect.right,
-                top: oRect.top,
-                bottom: oRect.bottom
-            };
-            
-            if (Math.abs(elEdges.left - otherEdges.right) < distance) {
-                el.style.left = (otherEdges.right) + 'px';
-                snapped = true;
+            // Reset pin appearance when unpinned
+            if (pinBtn) {
+                pinBtn.innerText = "📌"; // Back to regular pin
+                pinBtn.style.color = ""; // Reset color
             }
-            else if (Math.abs(elEdges.right - otherEdges.left) < distance) {
-                el.style.left = (otherEdges.left - elRect.width) + 'px';
-                snapped = true;
-            }
-            else if (Math.abs(elEdges.left - otherEdges.left) < distance) {
-                el.style.left = otherEdges.left + 'px';
-                snapped = true;
-            }
-            else if (Math.abs(elEdges.right - otherEdges.right) < distance) {
-                el.style.left = (otherEdges.right - elRect.width) + 'px';
-                snapped = true;
-            }
-            
-            if (Math.abs(elEdges.top - otherEdges.bottom) < distance) {
-                el.style.top = (otherEdges.bottom) + 'px';
-                snapped = true;
-            }
-            else if (Math.abs(elEdges.bottom - otherEdges.top) < distance) {
-                el.style.top = (otherEdges.top - elRect.height) + 'px';
-                snapped = true;
-            }
-            else if (Math.abs(elEdges.top - otherEdges.top) < distance) {
-                el.style.top = otherEdges.top + 'px';
-                snapped = true;
-            }
-            else if (Math.abs(elEdges.bottom - otherEdges.bottom) < distance) {
-                el.style.top = (otherEdges.bottom - elRect.height) + 'px';
-                snapped = true;
-            }
-        });
-        
-        return snapped;
+        }
+        scheduleSave();
     }
 
     function recoverElements() {
