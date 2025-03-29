@@ -16,9 +16,13 @@
             <span class="slider"></span>
         </label>
         <button class="reset-btn" onclick="resetWhiteboard()">Reset</button>
+        <button id="toggleControlsBtn" class="toggle-controls-btn" onclick="toggleControls()">◀</button>
     </div>
 
     <div id="whiteboard"></div>
+    
+    <!-- Show controls button (initially hidden) -->
+    <button id="showControlsBtn" class="show-controls-btn" onclick="toggleControls()" style="display: none;">▶</button>
     
     <!-- Tenor GIF Search Modal -->
     <div id="gifModal" class="modal">
@@ -50,6 +54,8 @@
     let zoomOriginY = 0;
     let panOffsetX = 0;
     let panOffsetY = 0;
+    let lastZoomTime = 0;
+    const ZOOM_THROTTLE_MS = 50; // Limit zoom calculations to once per 50ms
 
     // Generate & store userId in localStorage if none exists
     let userId = localStorage.getItem('userId');
@@ -240,6 +246,11 @@
         } else if (e.touches.length === 2) {
             e.preventDefault();
             
+            // Throttle zoom calculations to improve performance
+            const now = Date.now();
+            if (now - lastZoomTime < ZOOM_THROTTLE_MS) return;
+            lastZoomTime = now;
+            
             if (!isZooming) {
                 isZooming = true;
                 initialDistance = getDistance(e.touches[0], e.touches[1]);
@@ -249,19 +260,25 @@
                 zoomOriginY = midY;
             } else {
                 const currentDistance = getDistance(e.touches[0], e.touches[1]);
-                const newScale = currentScale * (currentDistance / initialDistance);
+                // Make zoom smoother by limiting the magnitude of change per event
+                const zoomRatio = Math.min(Math.max(currentDistance / initialDistance, 0.9), 1.1);
+                let newScale = currentScale * zoomRatio;
                 
-                const limitedScale = Math.min(Math.max(0.5, newScale), 3);
+                // Constrain zoom level with more gradual limits
+                newScale = Math.min(Math.max(0.5, newScale), 3);
                 
-                if (limitedScale !== currentScale) {
+                if (Math.abs(newScale - currentScale) > 0.01) { // Only update if change is significant
                     const whiteboard = document.getElementById('whiteboard');
-                    const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-                    const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-                    
                     whiteboard.style.transformOrigin = '0 0';
-                    whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${limitedScale})`;
+                    whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${newScale})`;
                     
-                    currentScale = limitedScale;
+                    // Update the background size to maintain grid appearance when zooming
+                    const gridSize = 20 * newScale;
+                    whiteboard.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+                    
+                    // Store new values for the next event
+                    currentScale = newScale;
+                    initialDistance = currentDistance; // Update for smoother zooming
                 }
             }
         }
@@ -663,6 +680,7 @@
     function resetZoom() {
         const whiteboard = document.getElementById('whiteboard');
         whiteboard.style.transform = 'translate(0, 0) scale(1)';
+        whiteboard.style.backgroundSize = '20px 20px'; // Reset grid size
         currentScale = 1;
         panOffsetX = 0;
         panOffsetY = 0;
@@ -762,6 +780,22 @@
             searchGifs();
         }
     });
+
+    // Add function to toggle controls visibility
+    function toggleControls() {
+        const controls = document.querySelector('.controls');
+        const showBtn = document.getElementById('showControlsBtn');
+        
+        if (controls.classList.contains('controls-hidden')) {
+            // Show controls
+            controls.classList.remove('controls-hidden');
+            showBtn.style.display = 'none';
+        } else {
+            // Hide controls
+            controls.classList.add('controls-hidden');
+            showBtn.style.display = 'block';
+        }
+    }
     </script>
 </body>
 </html>
