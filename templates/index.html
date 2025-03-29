@@ -56,6 +56,8 @@
     let panOffsetY = 0;
     let lastZoomTime = 0;
     const ZOOM_THROTTLE_MS = 50; // Limit zoom calculations to once per 50ms
+    const MIN_ZOOM = 0.25;
+    const MAX_ZOOM = 4;
 
     // Generate & store userId in localStorage if none exists
     let userId = localStorage.getItem('userId');
@@ -162,6 +164,9 @@
             document.body.classList.add('dark-mode');
             document.getElementById('darkModeToggle').checked = true;
         }
+        
+        // Set initial background size
+        document.body.style.backgroundSize = '20px 20px';
     }
 
     function startDrag(e, element) {
@@ -173,8 +178,9 @@
         const clientX = e.clientX || (e.touches && e.touches[0] ? e.touches[0].clientX : 0);
         const clientY = e.clientY || (e.touches && e.touches[0] ? e.touches[0].clientY : 0);
         
-        selectedElement.offsetX = clientX - rect.left;
-        selectedElement.offsetY = clientY - rect.top;
+        // Adjust offset calculation based on current zoom level
+        selectedElement.offsetX = (clientX - rect.left) / currentScale;
+        selectedElement.offsetY = (clientY - rect.top) / currentScale;
         
         selectedElement.isMobileTouch = !!e.touches;
         
@@ -212,15 +218,17 @@
             e.preventDefault();
             const touch = e.touches[0];
             
-            const newLeft = touch.clientX - selectedElement.offsetX;
-            const newTop = touch.clientY - selectedElement.offsetY;
-
+            // Adjust position calculation based on current zoom level
+            const newLeft = (touch.clientX - selectedElement.offsetX) / currentScale;
+            const newTop = (touch.clientY - selectedElement.offsetY) / currentScale;
+            
             const maxLeft = Math.max(window.innerWidth - 50, document.getElementById('whiteboard').scrollWidth - 50);
             const maxTop = Math.max(window.innerHeight - 50, document.getElementById('whiteboard').scrollHeight - 50);
-
+            
             const boundedLeft = Math.max(0, Math.min(newLeft, maxLeft));
             const boundedTop = Math.max(0, Math.min(newTop, maxTop));
-
+            
+            // Apply position with zoom compensation
             selectedElement.style.left = boundedLeft + 'px';
             selectedElement.style.top = boundedTop + 'px';
             
@@ -230,15 +238,16 @@
             const touch = e.touches[0];
             const element = resizeHandle.element;
             
-            const width = resizeHandle.startWidth + (touch.clientX - resizeHandle.startX);
-            const height = resizeHandle.startHeight + (touch.clientY - resizeHandle.startY);
+            // Adjust size calculation based on zoom level
+            const width = resizeHandle.startWidth + ((touch.clientX - resizeHandle.startX) / currentScale);
+            const height = resizeHandle.startHeight + ((touch.clientY - resizeHandle.startY) / currentScale);
             
             if (width > 100) element.style.width = width + 'px';
             if (height > 100) element.style.height = height + 'px';
             
             const rect = element.getBoundingClientRect();
             if (rect.right > window.innerWidth) {
-                const adjustedWidth = width - (rect.right - window.innerWidth + 10);
+                const adjustedWidth = width - ((rect.right - window.innerWidth + 10) / currentScale);
                 if (adjustedWidth > 100) element.style.width = adjustedWidth + 'px';
             }
             
@@ -256,25 +265,29 @@
                 initialDistance = getDistance(e.touches[0], e.touches[1]);
                 const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
                 const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+                
+                // Calculate zoom center point relative to the current transform
                 zoomOriginX = midX;
                 zoomOriginY = midY;
             } else {
                 const currentDistance = getDistance(e.touches[0], e.touches[1]);
                 // Make zoom smoother by limiting the magnitude of change per event
-                const zoomRatio = Math.min(Math.max(currentDistance / initialDistance, 0.9), 1.1);
+                const zoomRatio = Math.min(Math.max(currentDistance / initialDistance, 0.95), 1.05);
                 let newScale = currentScale * zoomRatio;
                 
                 // Constrain zoom level with more gradual limits
-                newScale = Math.min(Math.max(0.5, newScale), 3);
+                newScale = Math.min(Math.max(MIN_ZOOM, newScale), MAX_ZOOM);
                 
                 if (Math.abs(newScale - currentScale) > 0.01) { // Only update if change is significant
                     const whiteboard = document.getElementById('whiteboard');
+                    
+                    // Update the background size of BOTH whiteboard and body
+                    const gridSize = 20 * newScale;
+                    document.body.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+                    
+                    // Apply transform with consistent origin
                     whiteboard.style.transformOrigin = '0 0';
                     whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${newScale})`;
-                    
-                    // Update the background size to maintain grid appearance when zooming
-                    const gridSize = 20 * newScale;
-                    whiteboard.style.backgroundSize = `${gridSize}px ${gridSize}px`;
                     
                     // Store new values for the next event
                     currentScale = newScale;
@@ -299,34 +312,45 @@
     }
 
     document.addEventListener('touchstart', function(e) {
-        if (currentScale > 1 && e.touches.length === 1 && e.target.id === 'whiteboard') {
+        if (e.touches.length === 1 && !e.target.closest('.magnet, .note, button, .controls, .modal, .modal-content, input')) {
             e.preventDefault();
             const touch = e.touches[0];
-            whiteboard.dataset.panStartX = touch.clientX;
-            whiteboard.dataset.panStartY = touch.clientY;
+            document.body.dataset.panStartX = touch.clientX;
+            document.body.dataset.panStartY = touch.clientY;
+            document.body.dataset.isPanning = "true";
         }
     }, { passive: false });
     
     document.addEventListener('touchmove', function(e) {
-        if (currentScale > 1 && e.touches.length === 1 && 
-            e.target.id === 'whiteboard' && 
-            whiteboard.dataset.panStartX && whiteboard.dataset.panStartY) {
+        if (document.body.dataset.isPanning === "true" && e.touches.length === 1 && 
+            !e.target.closest('.magnet, .note, button, .controls, .modal, .modal-content, input')) {
             
             e.preventDefault();
             const touch = e.touches[0];
-            const deltaX = touch.clientX - whiteboard.dataset.panStartX;
-            const deltaY = touch.clientY - whiteboard.dataset.panStartY;
+            const deltaX = touch.clientX - document.body.dataset.panStartX;
+            const deltaY = touch.clientY - document.body.dataset.panStartY;
             
+            // Apply pan movement
             panOffsetX += deltaX;
             panOffsetY += deltaY;
             
             const whiteboard = document.getElementById('whiteboard');
             whiteboard.style.transform = `translate(${panOffsetX}px, ${panOffsetY}px) scale(${currentScale})`;
             
-            whiteboard.dataset.panStartX = touch.clientX;
-            whiteboard.dataset.panStartY = touch.clientY;
+            // Update starting position for next move
+            document.body.dataset.panStartX = touch.clientX;
+            document.body.dataset.panStartY = touch.clientY;
         }
     }, { passive: false });
+    
+    document.addEventListener('touchend', function(e) {
+        document.body.dataset.isPanning = "false";
+        endDrag();
+        
+        if (e.touches.length < 2) {
+            isZooming = false;
+        }
+    });
 
     function endDrag() {
         if (selectedElement) {
@@ -680,7 +704,7 @@
     function resetZoom() {
         const whiteboard = document.getElementById('whiteboard');
         whiteboard.style.transform = 'translate(0, 0) scale(1)';
-        whiteboard.style.backgroundSize = '20px 20px'; // Reset grid size
+        document.body.style.backgroundSize = '20px 20px'; // Reset grid size on body
         currentScale = 1;
         panOffsetX = 0;
         panOffsetY = 0;
