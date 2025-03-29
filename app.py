@@ -10,19 +10,25 @@ logger = logging.getLogger('whiteboard')
 app = Flask(__name__, static_folder="static")
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'data', 'whiteboards.json')
+TENOR_API_KEY = os.environ.get("TENOR_API_KEY", "YOUR_DEFAULT_TENOR_KEY")  # Fallback key
 
 @app.route('/')
 def index():
     return render_template('index.html')
 
-@app.route('/tenor-proxy')
+@app.route('/tenor-proxy', methods=['GET'])
 def tenor_proxy():
     search = request.args.get('q', '')
     api_key = request.args.get('key', '')
     limit = request.args.get('limit', 12)
+    logger.info(f"Received Tenor proxy request: q={search}, key_provided={bool(api_key)}, limit={limit}")
 
-    if not search or not api_key:
-        return jsonify({"error": "Missing parameters"}), 400
+    if not search:
+        return jsonify({"error": "Missing search query"}), 400
+    if not api_key:
+        api_key = TENOR_API_KEY
+        if not api_key:
+            return jsonify({"error": "No Tenor API key available"}), 400
 
     try:
         response = requests.get(
@@ -49,8 +55,12 @@ def user_whiteboard():
         os.makedirs(os.path.dirname(DATA_FILE))
 
     if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, 'r', encoding='utf-8') as f:
-            whiteboards = json.load(f)
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                whiteboards = json.load(f)
+        except Exception as e:
+            logger.error(f"Failed to load whiteboards.json: {e}")
+            whiteboards = {}
     else:
         whiteboards = {}
 
