@@ -117,6 +117,15 @@
                     note.style.width = element.width;
                     note.style.height = element.height;
                     note.innerHTML = element.content;
+                    
+                    // Extra handling to ensure text content is preserved
+                    if (element.text) {
+                        const contentDiv = note.querySelector('[contenteditable="true"]');
+                        if (contentDiv) {
+                            contentDiv.innerHTML = element.text;
+                        }
+                    }
+                    
                     if (element.pinned) {
                         note.classList.add('pinned');
                         const dragHandle = note.querySelector('.drag-handle');
@@ -134,6 +143,36 @@
         const elements = [];
         document.querySelectorAll('.magnet, .note').forEach(el => {
             const rect = el.getBoundingClientRect();
+            
+            // For notes, ensure we're properly capturing the contenteditable content
+            if (el.classList.contains('note')) {
+                const contentDiv = el.querySelector('[contenteditable="true"]');
+                if (contentDiv) {
+                    // Update the HTML content directly before saving
+                    const editorContent = contentDiv.innerHTML;
+                    const tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = el.innerHTML;
+                    
+                    const tempContentDiv = tempDiv.querySelector('[contenteditable="true"]');
+                    if (tempContentDiv) {
+                        tempContentDiv.innerHTML = editorContent;
+                    }
+                    
+                    elements.push({
+                        type: 'note',
+                        left: el.style.left || rect.left + 'px',
+                        top: el.style.top || rect.top + 'px',
+                        width: rect.width + 'px',
+                        height: rect.height + 'px',
+                        content: tempDiv.innerHTML,
+                        pinned: el.classList.contains('pinned'),
+                        text: editorContent // Store the text content separately for reliability
+                    });
+                    return;
+                }
+            }
+            
+            // Standard handling for other elements
             elements.push({
                 type: el.classList.contains('magnet') ? 'magnet' : 'note',
                 left: el.style.left || rect.left + 'px',
@@ -437,6 +476,20 @@
         note.style.top = (Math.random() * (window.innerHeight - 200)) + 'px';
 
         setupElementEvents(note);
+        
+        // Add event listener for content changes
+        const contentDiv = note.querySelector('[contenteditable="true"]');
+        if (contentDiv) {
+            contentDiv.addEventListener('input', function() {
+                scheduleSave();
+            });
+            
+            // Add blur event to ensure save happens when user finishes editing
+            contentDiv.addEventListener('blur', function() {
+                scheduleSave();
+            });
+        }
+        
         document.getElementById('whiteboard').appendChild(note);
         scheduleSave();
     }
@@ -580,6 +633,21 @@
                 startTop: parseInt(element.style.top || '0', 10)
             };
         }, { passive: false });
+
+        // Add event listener for content changes on notes
+        if (element.classList.contains('note')) {
+            const contentDiv = element.querySelector('[contenteditable="true"]');
+            if (contentDiv) {
+                contentDiv.addEventListener('input', function() {
+                    scheduleSave();
+                });
+                
+                // Add blur event to ensure save happens when user finishes editing
+                contentDiv.addEventListener('blur', function() {
+                    scheduleSave();
+                });
+            }
+        }
     }
 
     function togglePin(element) {
